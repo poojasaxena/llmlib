@@ -1,0 +1,21 @@
+[build-system]
+requires        = ["setuptools>=61.0"]
+build-backend   = "setuptools.build_meta"
+
+[project]
+name            = "llmlib"
+version         = "0.9.0"
+description     = "Pooja's LLM utilities and tiny transformer library"
+readme          = "ReadMe.md"
+requires-python = ">=3.10"
+dependencies    = []
+
+[project.scripts]
+tiny-gpt-train = "llmlib.cli:tiny_gpt_train"
+tiny-gpt-infer = "llmlib.cli:tiny_gpt_infer"
+
+[tool.setuptools]
+package-dir     = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where           = ["src"]

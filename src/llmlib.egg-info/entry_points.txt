@@ -1,0 +1,3 @@
+[console_scripts]
+tiny-gpt-infer = llmlib.cli:tiny_gpt_infer
+tiny-gpt-train = llmlib.cli:tiny_gpt_train
