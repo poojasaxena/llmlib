@@ -11,8 +11,9 @@ requires-python = ">=3.10"
 dependencies    = []
 
 [project.scripts]
-tiny-gpt-train = "llmlib.cli:tiny_gpt_train"
-tiny-gpt-infer = "llmlib.cli:tiny_gpt_infer"
+[project.scripts]
+tiny-gpt-train = "llmlib.cli.main_cli:tiny_gpt_train"
+tiny-gpt-infer = "llmlib.cli.main_cli:tiny_gpt_infer"
 
 [tool.setuptools]
 package-dir     = {"" = "src"}
