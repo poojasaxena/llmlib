@@ -24,13 +24,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from llmlib.io import (
-    load_project_config,
-    get_data_file_path,
-    save_tiny_model,
-    load_tiny_model,
-)
-from llmlib.tokenization.tokenizer import encode, decode, VOCAB_SIZE
+from llmlib.utils.path_util import  get_data_file_path
+from llmlib.utils.config_util import  load_config
+
+from llmlib.utils.checkpoint import save_model, load_model
+from llmlib.tokenization.byte_bpe_tokenizer import ByteBPETokenizer, VOCAB_SIZE
 from llmlib.tiny_config import TinyConfig
 from llmlib.tiny_model import TinyTransformerModel
 
@@ -46,7 +44,7 @@ def _load_nested_project_config(config_path: Path) -> dict:
     - caller_file   = full path to the config file
     - config_filename = the actual filename
     """
-    cfg = load_project_config(
+    cfg = load_config(
         caller_file=str(config_path),
         config_filename=config_path.name,
     )
@@ -116,7 +114,8 @@ def tiny_gpt_train() -> None:
     with data_path.open("r", encoding="utf-8") as f:
         text = f.read()
 
-    encoded_data = [encode(t) for t in text.splitlines() if t]
+    tokenizer = CharTokenizer()
+    encoded_data = [tokenizer.encode(t) for t in text.splitlines() if t]
 
     if not encoded_data:
         raise ValueError(f"No non-empty lines found in dataset: {data_path}")
@@ -195,7 +194,7 @@ def tiny_gpt_train() -> None:
             print(f"Step {step}, Loss: {loss.item():.4f}")
 
     # 6) Save model
-    ckpt_path = save_tiny_model(model, cfg)
+    ckpt_path = save_model(model, cfg)
     print(f"\n[tiny-gpt-train] Model saved to: {ckpt_path}")
 
 
@@ -211,7 +210,8 @@ def _generate_text(
     model.eval()
     device = next(model.parameters()).device
 
-    input_ids = encode(prompt)
+    tokenizer = CharTokenizer()
+    input_ids = tokenizer.encode(prompt)
     if input_ids.numel() == 0:
         return ""
 
@@ -231,11 +231,11 @@ def _generate_text(
             [generated, torch.tensor([next_id], device=device)], dim=0
         )
 
-        next_char = decode(torch.tensor([next_id]))
+        next_char = tokenizer.decode(torch.tensor([next_id]))
         if next_char in [".", "?", "!"]:
             break
 
-    return decode(generated.cpu())
+    return tokenizer.decode(generated.cpu())
 
 
 def tiny_gpt_infer() -> None:
@@ -282,7 +282,7 @@ def tiny_gpt_infer() -> None:
     max_new_tokens = meta_cfg.get("max_new_tokens", 40)
 
     # Load model
-    model = load_tiny_model(cfg, device=device, eval_mode=True)
+    model = load_model(cfg, device=device, eval_mode=True)
 
     # Prompt
     prompt = args.prompt

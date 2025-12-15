@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 from transformers import PreTrainedModel
-from .configs.tiny_config import TinyConfig
+from llmlib.modeling.configs.tiny_config import TinyConfig
 
 ## Self-Attention Module, implements multi-head self-attention (heart of the transformer)
 class TinySelfAttention(nn.Module):

@@ -102,7 +102,8 @@ def train_and_save_tokenizer(
         extra_train_kwargs["min_freq"] = min_freq
 
     # Train
-    tokenizer = tokenizer_class.train(texts, vocab_size=vocab_size, **extra_train_kwargs)
+    texts_str = "\n".join(texts)
+    tokenizer = tokenizer_class.train(texts_str, vocab_size=vocab_size, **extra_train_kwargs)
 
     # Save
     if out_path is not None:

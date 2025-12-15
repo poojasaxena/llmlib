@@ -1,3 +1,6 @@
 [console_scripts]
-tiny-gpt-infer = llmlib.cli:tiny_gpt_infer
-tiny-gpt-train = llmlib.cli:tiny_gpt_train
+modern-gpt-infer = llmlib.cli.modern_gpt_cli:modern_gpt_infer
+modern-gpt-train = llmlib.cli.modern_gpt_cli:modern_gpt_train
+tiny-gpt-infer = llmlib.cli.main_cli:tiny_gpt_infer
+tiny-gpt-train = llmlib.cli.main_cli:tiny_gpt_train
+train-tokenizer = llmlib.cli.train_tokenizer_cli:main

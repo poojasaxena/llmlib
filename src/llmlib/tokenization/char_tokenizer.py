@@ -6,6 +6,7 @@ from typing import List
 CHARS = list("abcdefghijklmnopqrstuvwxyz .,!?")
 VOCAB = {ch: i for i, ch in enumerate(CHARS)}
 INV_VOCAB = {i: ch for ch, i in VOCAB.items()}
+VOCAB_SIZE = len(VOCAB)
 MODEL_TYPE = "char"
 
 

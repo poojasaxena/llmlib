@@ -1,33 +1,27 @@
 # src/llmlib/__init__.py
 
-# Tokenizers
+# Tokenizers (lightweight)
 from .tokenization.char_bpe_tokenizer import CharBPETokenizer
 from .tokenization.byte_bpe_tokenizer import ByteBPETokenizer
-from .tokenization import load_tokenizer
+from .tokenization.registry import load_tokenizer
 
-# Models
-from .modeling.tiny_model import TinyModel
-from .modeling.modern_gpt import ModernGPT
-
-# Configs
+# Configs (lightweight)
 from .modeling.configs.tiny_config import TinyConfig
 
-# Utils
-from .utils.io import read_file, write_file
+# Utils (lightweight)
+from .utils.checkpoint import save_model, load_model
 
 __all__ = [
     # Tokenizers
     "CharBPETokenizer",
     "ByteBPETokenizer",
-
-    # Models
-    "TinyModel",
-    "ModernGPT",
+    "load_tokenizer",
 
     # Configs
     "TinyConfig",
 
+
     # Utils
-    "read_file",
-    "write_file",
+    "save_model",
+    "load_model",
 ]
