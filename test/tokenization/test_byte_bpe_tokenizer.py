@@ -8,7 +8,7 @@ TEXT = "hello elephants\nwhere do elephants live?"
 @pytest.fixture(scope="module")
 def tokenizer():
     return ByteBPETokenizer.train(
-        texts=[TEXT],
+        text=[TEXT],
         vocab_size=512,  # keep small for fast tests
         min_freq=1,
         special_tokens=["<pad>", "<unk>", "<bos>", "<eos>"],

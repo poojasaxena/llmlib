@@ -97,6 +97,7 @@ class ByteBPETokenizer:
         """
         if isinstance(text, list):
             text = "\n".join(text)
+            
         # 1) Turn into byte tokens
         tokens = []
         for word in re.findall(r"\S+|\s+", text):

@@ -76,11 +76,23 @@ def modern_gpt_train() -> None:
     with data_path.open("r", encoding="utf-8") as f:
         text = f.read()
 
+    tokenizer_cfg = cfg["tokenizer_config"]
+    if tokenizer_cfg is None:
+        raise ValueError("Missing 'tokenizer_config' in project_config.json")
+
     # Train Byte BPE tokenizer on train set only
     tokenizer = ByteBPETokenizer.train(
-        text, vocab_size=train_cfg.get("vocab_size", 4096)
+        text=text,
+        vocab_size=tokenizer_cfg["vocab_size"],
+        min_freq=tokenizer_cfg.get("min_freq", 2),
+        special_tokens=tokenizer_cfg.get("special_tokens"),
     )
     print(f"[modern-gpt-train] Tokenizer trained. Vocab size: {len(tokenizer.vocab)}")
+
+    assert tokenizer.vocab_size == tokenizer_cfg["vocab_size"], (
+        f"Tokenizer vocab mismatch: "
+        f"{tokenizer.vocab_size} != {tokenizer_cfg['vocab_size']}"
+    )
 
     # Encode full dataset for simplicity
     encoded_data = tokenizer.encode(text)

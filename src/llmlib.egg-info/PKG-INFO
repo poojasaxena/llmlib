@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: llmlib
-Version: 1.2.8
+Version: 1.2.10
 Summary: Pooja's LLM utilities and tiny transformer library
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
