@@ -4,7 +4,7 @@ build-backend   = "setuptools.build_meta"
 
 [project]
 name            = "llmlib"
-version         = "1.2.10"
+version         = "1.4.2"
 description     = "Pooja's LLM utilities and tiny transformer library"
 readme          = "ReadMe.md"
 requires-python = ">=3.10"
@@ -18,6 +18,7 @@ tiny-gpt-infer  = "llmlib.cli.main_cli:tiny_gpt_infer"
 train-tokenizer = "llmlib.cli.train_tokenizer_cli:main"
 modern-gpt-train = "llmlib.cli.modern_gpt_cli:modern_gpt_train"
 modern-gpt-infer = "llmlib.cli.modern_gpt_cli:modern_gpt_infer"
+run-data-pipeline = "llmlib.data.pipeline.run_full_data_pipeline:main"
 
 [tool.setuptools]
 package-dir     = {"" = "src"}
