@@ -97,7 +97,7 @@ class ByteBPETokenizer:
         """
         if isinstance(text, list):
             text = "\n".join(text)
-            
+
         # 1) Turn into byte tokens
         tokens = []
         for word in re.findall(r"\S+|\s+", text):
@@ -230,6 +230,12 @@ class ByteBPETokenizer:
             merges=[tuple(x) for x in data["merges"]],
             byte_fallback=data.get("byte_fallback", True),
         )
+
+    def token_to_id(self, token: str) -> int:
+        return self.vocab.get(token, self.vocab.get("<unk>", 0))
+    
+    def id_to_token_str(self, idx: int) -> str:
+        return self.id_to_token.get(idx, "<unk>")
 
 
     @property

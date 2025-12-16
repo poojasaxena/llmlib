@@ -54,6 +54,25 @@ def get_data_file_path(project_config: dict) -> Path:
     return full_path
 
 
+def get_data_split_path(project_config: dict, split: str) -> Path:
+    """
+    Return full path to a dataset split file (train / val / test).
+
+    split must be one of: 'data_file', 'val_file', 'test_file'
+    """
+    data_dir = get_data_dir(project_config)
+    meta = _meta(project_config)
+
+    if split not in meta:
+        raise KeyError(f"'{split}' not found in project_metadata")
+
+    full_path = data_dir / meta[split]
+
+    if not full_path.exists():
+        raise FileNotFoundError(f"{split} not found at: {full_path}")
+
+    return full_path
+
 
 # ---------------------------------------------------------------------
 # 2. Global model directory helpers
@@ -111,3 +130,10 @@ def get_model_paths(project_config: dict, create_dir: bool = True):
     ckpt_path = model_dir / "model.pt"
     cfg_path = model_dir / "tiny_config.json"
     return model_dir, ckpt_path, cfg_path
+
+
+def short_path(p: Path, base: Path) -> str:
+    try:
+        return str(p.relative_to(base))
+    except ValueError:
+        return str(p)  

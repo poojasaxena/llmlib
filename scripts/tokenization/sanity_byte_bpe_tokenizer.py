@@ -1,4 +1,4 @@
-## llmlib/test/tokenization/test_byte_bpe_tokenizer.py
+## llmlib/scripts/tokenization/sanity_byte_bpe_tokenizer.py
 """
 Manual sanity check for ByteBPETokenizer.
 Run directly, NOT via pytest.

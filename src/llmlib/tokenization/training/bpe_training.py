@@ -1,3 +1,4 @@
+## llmlib/tokenization/training/bpe_training.py
 from __future__ import annotations
 from pathlib import Path
 import json
@@ -102,9 +103,17 @@ def train_and_save_tokenizer(
         extra_train_kwargs["min_freq"] = min_freq
 
     # Train
-    texts_str = "\n".join(texts)
-    tokenizer = tokenizer_class.train(texts_str, vocab_size=vocab_size, **extra_train_kwargs)
+    tokenizer_config = project_config.get("tokenizer_config", {})
+    special_tokens = tokenizer_config.get("special_tokens", [])
 
+    # Train
+    texts_str = "\n".join(texts)
+    tokenizer = tokenizer_class.train(
+    texts_str,
+    vocab_size=vocab_size,
+    special_tokens=special_tokens,  
+    **extra_train_kwargs
+)
     # Save
     if out_path is not None:
         tok_path = Path(out_path)
