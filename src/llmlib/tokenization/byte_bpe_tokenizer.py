@@ -25,8 +25,7 @@ class ByteBPETokenizer:
         vocab: Dict[str, int],
         merges: List[Tuple[str, str]],
         special_tokens: List[str] | None = None,
-        byte_fallback: bool = True,
-    ):
+        byte_fallback: bool = True):
         self.special_tokens = special_tokens or []
         self.vocab = vocab
         self.id_to_token = {i: t for t, i in vocab.items()}
@@ -148,7 +147,6 @@ class ByteBPETokenizer:
                 vocab[new_token] = idx
                 idx += 1
 
-
         return cls(
             vocab=vocab,
             merges=merges,
@@ -231,3 +229,8 @@ class ByteBPETokenizer:
             merges=[tuple(x) for x in data["merges"]],
             byte_fallback=data.get("byte_fallback", True),
         )
+
+
+    @property
+    def vocab_size(self):
+        return len(self.vocab)

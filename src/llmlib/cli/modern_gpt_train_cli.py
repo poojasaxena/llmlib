@@ -1,4 +1,4 @@
-# llmlib/cli/main_cli.py
+# llmlib/cli/modern_gpt_train_cli.py
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import torch.optim as optim
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_file_path
 from llmlib.utils.config_util import load_config
-from llmlib.utils.checkpoint import save_model, load_model
-from llmlib.tokenization.char_tokenizer import CharTokenizer
+from llmlib.utils.checkpoint import save_model
+from llmlib.tokenization.registry import load_tokenizer
 
 
 # ---------------------------------------------------------
@@ -74,7 +74,17 @@ def modern_gpt_train() -> None:
     with data_path.open("r", encoding="utf-8") as f:
         text = f.read()
 
-    tokenizer = CharTokenizer()
+    tokenizer_path = Path(meta_cfg["tokenizer_save_path"]).expanduser().resolve()
+    tokenizer = load_tokenizer(tokenizer_path)
+
+    assert model_cfg["num_embeddings"] == len(tokenizer.vocab), (
+        f"Config num_embeddings={model_cfg['num_embeddings']} "
+        f"but tokenizer vocab={len(tokenizer.vocab)}"
+    )
+
+    print(f"[modern-gpt-train] Loaded tokenizer from: {tokenizer_path}")
+    print(f"[modern-gpt-train] Tokenizer vocab size: {len(tokenizer.vocab)}")
+
     encoded_data = [tokenizer.encode(t) for t in text.splitlines() if t]
 
     if not encoded_data:
@@ -88,7 +98,7 @@ def modern_gpt_train() -> None:
 
     # 3) Build ModernGPTConfig + model
     config = ModernGPTConfig(
-        vocab_size=tokenizer.vocab_size(),
+        vocab_size=len(tokenizer.vocab),
         d_model=model_cfg["d_model"],
         n_heads=model_cfg["n_heads"],
         n_layers=model_cfg["n_layers"],

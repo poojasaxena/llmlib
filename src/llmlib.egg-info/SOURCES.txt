@@ -14,7 +14,7 @@ src/llmlib/cli/train_tokenizer_cli.py
 src/llmlib/data/corpus_stats.py
 src/llmlib/data/dedupe_and_split.py
 src/llmlib/data/prepare_corpus.py
-src/llmlib/data/prepare_data.py
+src/llmlib/data/run_full_pipeline.py
 src/llmlib/data/split_corpus.py
 src/llmlib/data/synth_expand.py
 src/llmlib/modeling/modern_gpt.py
