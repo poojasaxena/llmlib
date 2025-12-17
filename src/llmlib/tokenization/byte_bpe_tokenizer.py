@@ -220,6 +220,7 @@ class ByteBPETokenizer:
             "model_type": self.model_type,
             "vocab": self.vocab,
             "merges": [list(m) for m in self.merges],
+            "special_tokens": self.special_tokens,
             "byte_fallback": self.byte_fallback,
         }
 
@@ -228,6 +229,7 @@ class ByteBPETokenizer:
         return cls(
             vocab=data["vocab"],
             merges=[tuple(x) for x in data["merges"]],
+            special_tokens=data.get("special_tokens", ["<pad>", "<unk>", "<bos>", "<eos>"]),
             byte_fallback=data.get("byte_fallback", True),
         )
 

@@ -98,24 +98,26 @@ class MultiHeadSelfAttention(nn.Module):
         self.n_heads = config.n_heads
         self.head_dim = config.d_model // config.n_heads
 
+        # head dim must be divisible by 2 for RoPE (even number of features per head)
+        assert self.head_dim % 2 == 0, "head_dim must be even for rotary embeddings"
+
         self.qkv = nn.Linear(config.d_model, 3 * config.d_model)
         self.out_proj = nn.Linear(config.d_model, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
 
-        # Causal mask: (1, 1, T, T) will be created on the fly for max seq len
-        self.register_buffer(
-            "mask",
-            torch.tril(
-                torch.ones(
-                    config.max_position_embeddings, config.max_position_embeddings
-                )
-            ).view(
-                1, 1, config.max_position_embeddings, config.max_position_embeddings
-            ),
-            persistent=False,
+        # Causal mask: boolean (1, 1, T, T) will be created on the fly for max seq len
+        causal = torch.tril(
+            torch.ones(
+                config.max_position_embeddings, config.max_position_embeddings, dtype=torch.bool
+            )
+        ).view(
+            1, 1, config.max_position_embeddings, config.max_position_embeddings
         )
+        self.register_buffer("mask", causal, persistent=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, 
+                x: torch.Tensor,
+                attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, T, D = x.shape  # batch, seq, dim
 
         qkv = self.qkv(x)  # (B, T, 3D)
@@ -130,13 +132,19 @@ class MultiHeadSelfAttention(nn.Module):
         q, k = apply_rotary_pos_emb(q, k)
 
         # attention scores
-        attn_scores = (q @ k.transpose(-2, -1)) / math.sqrt(
-            self.head_dim
-        )  # (B, H, T, T)
+        scale = 1.0 / math.sqrt(float(self.head_dim))
+        attn_scores = (q @ k.transpose(-2, -1)) * scale  # (B, H, T, T)
 
-        # causal mask
+        # causal mask (boolean)
         mask = self.mask[:, :, :T, :T]  # (1,1,T,T)
-        attn_scores = attn_scores.masked_fill(mask == 0, float("-inf"))
+        attn_scores = attn_scores.masked_fill(~mask, float("-inf"))
+
+        # padding mask
+        if attention_mask is not None:
+            # attention_mask: (B, T) where 1 = keep, 0 = pad
+            pad_mask = attention_mask[:, None, None, :].to(torch.bool)  # (B,1,1,T)
+            attn_scores = attn_scores.masked_fill(~pad_mask, float("-inf"))
+        
 
         attn_probs = F.softmax(attn_scores, dim=-1)
         attn_probs = self.dropout(attn_probs)
@@ -186,9 +194,9 @@ class DecoderBlock(nn.Module):
         self.attn = MultiHeadSelfAttention(config)
         self.ffn = SwiGLUFeedForward(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         # pre-norm
-        x = x + self.attn(self.ln1(x))
+        x = x + self.attn(self.ln1(x), attention_mask=attention_mask)
         x = x + self.ffn(self.ln2(x))
         return x
 
@@ -220,18 +228,26 @@ class ModernGPTModel(nn.Module):
         if isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
-        input_ids: (B, T)
+        input_ids: (B, T) or (T,) - if 1D, will be treated as batch size 1
         returns: logits (B, T, vocab_size)
         """
+        # Handle both 1D and 2D input tensors
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)  # Add batch dimension: (T,) -> (1, T)
+        elif input_ids.dim() > 2:
+            raise ValueError(f"input_ids should be 1D or 2D, got {input_ids.dim()}D tensor with shape {input_ids.shape}")
+        
         B, T = input_ids.shape
 
         x = self.tok_emb(input_ids)  # (B, T, D)
         x = self.drop(x)
 
         for block in self.blocks:
-            x = block(x)
+            x = block(x, attention_mask=attention_mask)
 
         x = self.ln_f(x)
         logits = self.head(x)

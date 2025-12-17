@@ -49,8 +49,8 @@ def _select_device(device_arg: str | None) -> str:
 # -----------------------
 # modern-gpt-train
 # -----------------------
-def modern_gpt_train() -> None:
-    parser = argparse.ArgumentParser(description="Train a Modern GPT model.")
+def tiny_gpt_train() -> None:
+    parser = argparse.ArgumentParser(description="Train a Tiny GPT model.")
     parser.add_argument(
         "--config", type=str, required=True, help="Path to project_config.json"
     )
@@ -159,8 +159,7 @@ def _generate_text(
     tokenizer: ByteBPETokenizer,
     prompt: str,
     max_seq_len: int,
-    max_new_tokens: int,
-) -> str:
+    max_new_tokens: int) -> str:
     model.eval()
     device = next(model.parameters()).device
     input_ids = tokenizer.encode(prompt)
@@ -182,9 +181,10 @@ def _generate_text(
     return tokenizer.decode(generated)
 
 
-def modern_gpt_infer() -> None:
+def tiny_gpt_infer() -> None:
+    
     parser = argparse.ArgumentParser(
-        description="Run inference with a Modern GPT model."
+        description="Run inference with a Tiny GPT model."
     )
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None)
@@ -209,8 +209,8 @@ def modern_gpt_infer() -> None:
     device = _select_device(args.device)
     cfg = _load_nested_project_config(config_path)
 
-    meta_cfg = cfg["project_metadata"]
-    max_seq_len = meta_cfg["max_seq_length"]
+    meta_cfg       = cfg["project_metadata"]
+    max_seq_len    = meta_cfg["max_seq_length"]
     max_new_tokens = meta_cfg.get("max_new_tokens", 40)
 
     # --------------------------------------------------

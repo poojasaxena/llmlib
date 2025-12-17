@@ -11,24 +11,12 @@ import torch.optim as optim
 
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_split_path
-from llmlib.utils.config_util import load_config
+from llmlib.utils.config_util import load_nested_config
 from llmlib.utils.checkpoint import save_model
 from llmlib.tokenization.registry import load_tokenizer
-from llmlib.utils.path_util import short_path
 from llmlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# ---------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------
-def _load_nested_project_config(config_path: Path) -> dict:
-    cfg = load_config(caller_file=str(config_path), config_filename=config_path.name)
-    for key in ("model_config", "training_config", "project_metadata"):
-        if key not in cfg:
-            logger.error(f"Missing '{key}' in project_config: {config_path}")
-            raise ValueError(f"Missing '{key}' in project_config: {config_path}")
-    return cfg
 
 
 def _select_device(device_arg: str | None) -> str:
@@ -67,7 +55,7 @@ def modern_gpt_train() -> None:
     logger.info(f"[modern-gpt-train] Using device: {device}")
 
     # 1) Load nested config
-    cfg = _load_nested_project_config(config_path)
+    cfg = load_nested_config(caller_file=str(config_path), config_filename=config_path.name)
     model_cfg = cfg["model_config"]
     train_cfg = cfg["training_config"]
     meta_cfg = cfg["project_metadata"]
@@ -87,6 +75,11 @@ def modern_gpt_train() -> None:
     )
 
     logger.info(f"[modern-gpt-train] Tokenizer vocab size: {len(tokenizer.vocab)}")
+
+    ## Sanity checks
+    print("PAD:", tokenizer.token_to_id("<pad>"))
+    print("BOS:", tokenizer.token_to_id("<bos>"))
+    print("EOS:", tokenizer.token_to_id("<eos>"))
 
     encoded_data = [tokenizer.encode(t) for t in text.splitlines() if t]
 
@@ -111,7 +104,9 @@ def modern_gpt_train() -> None:
 
     model = ModernGPTModel(config).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
-    criterion = nn.CrossEntropyLoss()
+
+    pad_id = tokenizer.token_to_id("<pad>")
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
 
     print("\n============================================================")
     print("🚀 modern-gpt-train")
@@ -138,8 +133,6 @@ def modern_gpt_train() -> None:
         batch = [torch.tensor(x, dtype=torch.long) for x in batch]
 
         max_len = max(len(x) for x in batch)
-        pad_id = tokenizer.token_to_id("<pad>") 
-
         padded = [
         torch.cat([
             x,
@@ -149,7 +142,6 @@ def modern_gpt_train() -> None:
         ]
 
         return torch.stack(padded, dim=0)
-
 
     # 5) Training loop
 
@@ -165,17 +157,24 @@ def modern_gpt_train() -> None:
     model.train()
     for step in range(train_steps):
         input_ids = make_batch(batch_size).to(device)
-        targets = input_ids[:, 1:].contiguous()
-        inputs = input_ids[:, :-1].contiguous()
+        pad_id = tokenizer.token_to_id("<pad>")
+        full_attention_mask = (input_ids != pad_id).long()
 
-        logits = model(inputs)
-        loss = criterion(logits.view(-1, config.vocab_size), targets.view(-1))
+        targets = input_ids[:, 1:]
+        inputs = input_ids[:, :-1]
+
+        attention_mask = full_attention_mask[:, :-1]
+        logits = model(inputs, attention_mask=attention_mask)
+
+        assert inputs.shape == attention_mask.shape
+
+        loss = criterion(logits.reshape(-1, config.vocab_size), targets.reshape(-1))
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        if step % eval_interval == 0:
+        if step % eval_interval == 0 or step < 20:
             # print(f"Step {step}, Loss: {loss.item():.4f}")
             val_loss = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
             print(f"Step {step}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
@@ -194,24 +193,36 @@ def modern_gpt_train() -> None:
     save_model(model, cfg)  # optional: overwrite config with correct vocab
 
 
-def compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device):
+
+@torch.no_grad()
+def compute_val_loss(
+    model,
+    tokenizer,
+    val_encoded,
+    max_seq_len,
+    device):
+
     model.eval()
 
-    criterion = nn.CrossEntropyLoss()
-    total_loss = 0.0
-    count = 0
-    with torch.no_grad():
-        for line in val_encoded:
-            if len(line) < 2:
-                continue
-            # Truncate to max_seq_len
-            line = line[: max_seq_len + 1]  # +1 because we shift
+    pad_id = tokenizer.token_to_id("<pad>")
+    bos_id = tokenizer.token_to_id("<bos>")
+    eos_id = tokenizer.token_to_id("<eos>")
 
-            input_ids = torch.tensor(line[:-1], dtype=torch.long).unsqueeze(0).to(device)
-            targets = torch.tensor(line[1:], dtype=torch.long).unsqueeze(0).to(device)
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
 
-            logits = model(input_ids)
-            loss = criterion(logits.view(-1, len(tokenizer.vocab)), targets.view(-1))
-            total_loss += loss.item()
-            count += 1
-    return total_loss / max(1, count)
+    losses = []
+
+    for seq in val_encoded:
+        # Add BOS/EOS + truncate
+        ids = [bos_id] + seq[: max_seq_len - 2] + [eos_id]
+
+        x = torch.tensor(ids[:-1], dtype=torch.long, device=device).unsqueeze(0)
+        y = torch.tensor(ids[1:], dtype=torch.long, device=device).unsqueeze(0)
+
+        logits = model(x)
+
+        loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+        losses.append(loss.item())
+
+    model.train()
+    return sum(losses) / len(losses)
