@@ -137,3 +137,56 @@ def short_path(p: Path, base: Path) -> str:
         return str(p.relative_to(base))
     except ValueError:
         return str(p)  
+
+
+# ---------------------------------------------------------------------
+# 3. Checkpoint path helpers
+# ---------------------------------------------------------------------
+def resolve_checkpoint_path(
+    project_config: dict,
+    ckpt: str,
+    default_filename: str = "best.pt",
+) -> Path:
+    if not ckpt or not str(ckpt).strip():
+        raise ValueError("Empty checkpoint path")
+
+    raw = str(ckpt).strip()
+    p = Path(raw).expanduser()
+
+    # Allow passing just a directory name like "gpt-bpe-v6"
+    if p.suffix == "" and "/" not in raw and "\\" not in raw:
+        p = Path(raw) / default_filename
+
+    # 1) Absolute
+    if p.is_absolute():
+        return p.resolve()
+
+    base = get_global_model_dir()
+    meta = _meta(project_config)
+    sub = meta.get(
+        "model_save_path", ""
+    )  # e.g. "llm/language_models/elephantdomain_gpt/"
+
+    tried = []
+
+    # 2) relative to global models dir
+    cand1 = (base / p).resolve()
+    tried.append(cand1)
+
+    # 3) shorthand under model_save_path
+    if sub:
+        cand2 = (base / sub / p).resolve()
+        tried.append(cand2)
+
+    # 4) relative to current working dir (optional, but can help local experiments)
+    cand3 = (Path.cwd() / p).resolve()
+    tried.append(cand3)
+
+    for c in tried:
+        if c.exists():
+            return c
+
+    msg = "resume_from checkpoint not found. Tried:\n" + "\n".join(
+        f"  - {t}" for t in tried
+    )
+    raise FileNotFoundError(msg)

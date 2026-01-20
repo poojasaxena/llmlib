@@ -8,7 +8,6 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim import lr_scheduler
 
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_split_path
@@ -16,7 +15,8 @@ from llmlib.utils.config_util import load_config
 from llmlib.utils.checkpoint import save_model
 from llmlib.tokenization.registry import load_tokenizer
 from llmlib.utils.logger import get_logger
-from llmlib.utils.path_util import get_model_dir
+from llmlib.utils.path_util import get_model_dir, resolve_checkpoint_path, short_path
+from llmlib.training.lr_schedulers import build_lr_scheduler
 
 logger = get_logger(__name__)
 
@@ -132,12 +132,12 @@ def modern_gpt_train() -> None:
 
     # 3) Build ModernGPTConfig + model
     config = ModernGPTConfig(
-        vocab_size=len(tokenizer.vocab),
-        d_model=model_cfg["d_model"],
-        n_heads=model_cfg["n_heads"],
-        n_layers=model_cfg["n_layers"],
-        max_position_embeddings=max_seq_len,
-        dropout=model_cfg["dropout"],
+        vocab_size              = len(tokenizer.vocab),
+        d_model                 = model_cfg["d_model"],
+        n_heads                 = model_cfg["n_heads"],
+        n_layers                = model_cfg["n_layers"],
+        max_position_embeddings = max_seq_len,
+        dropout                 = model_cfg["dropout"],
     )
 
     model = ModernGPTModel(config).to(device)
@@ -148,16 +148,18 @@ def modern_gpt_train() -> None:
     )
 
     # Learning rate scheduler
-    lr_scheduler_type = train_cfg.get("lr_scheduler", "constant")
-    if lr_scheduler_type == "cosine":
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_steps, eta_min=0)
-    elif lr_scheduler_type == "onecycle":
-        scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate, total_steps=train_steps)
-    else:
-        scheduler = None
+    scheduler = build_lr_scheduler(
+        optimizer,
+        base_lr=learning_rate,
+        train_steps=train_steps,
+        warmup_steps=train_cfg.get("warmup_steps", 0),
+        scheduler_cfg=train_cfg.get("lr_scheduler"),
+    )
+
 
     pad_id = tokenizer.token_to_id("<pad>")
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
+    sched_cfg = train_cfg.get("lr_scheduler", {"type": "constant"})
 
     print("\n============================================================")
     print("🚀 modern-gpt-train")
@@ -172,7 +174,7 @@ def modern_gpt_train() -> None:
     print(f"batch_size       : {batch_size}")
     print(f"learning_rate    : {learning_rate}")
     print(f"train_steps      : {train_steps}")
-    print(f"LR Scheduler     : {lr_scheduler_type}")
+    print(f"LR Scheduler     : {sched_cfg}")
     print("============================================================\n")
 
     ## 4) Batching helper
@@ -202,11 +204,12 @@ def modern_gpt_train() -> None:
     last_path = model_dir / "last.pt"
 
     ### Resume from last checkpoint if exists
-    resume_from = train_cfg.get("resume_from", None)
+    resume_from = train_cfg.get("resume_from")
     if resume_from:
-        resume_path = Path(resume_from).expanduser().resolve()
+        resume_path = resolve_checkpoint_path(cfg, resume_from)
         if not resume_path.exists():
             raise FileNotFoundError(f"resume_from checkpoint not found: {resume_path}")
+
         logger.info(f"[modern-gpt-train] Resuming weights from: {resume_path}")
         state = torch.load(resume_path, map_location=device)
         model.load_state_dict(state)
