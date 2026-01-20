@@ -98,7 +98,6 @@ def modern_gpt_train() -> None:
     # Write back normalized form (optional but recommended)
     model_cfg["vocab_size"] = vocab_size
 
-
     # 2) Load dataset
     data_path = get_data_split_path(cfg, "data_file")
     logger.info(f"[modern-gpt-train] Using data file: {data_path}")
@@ -108,10 +107,10 @@ def modern_gpt_train() -> None:
 
     tokenizer = load_tokenizer(cfg)  # pass the full project config
 
-    assert model_cfg["num_embeddings"] == len(tokenizer.vocab), (
-        f"Config num_embeddings={model_cfg['num_embeddings']} "
+    assert model_cfg["vocab_size"] == len(tokenizer.vocab), (
+        f"Config vocab_size={model_cfg['vocab_size']} "
         f"but tokenizer vocab={len(tokenizer.vocab)}"
-    )
+        )
 
     logger.info(f"[modern-gpt-train] Tokenizer vocab size: {len(tokenizer.vocab)}")
 
@@ -202,6 +201,17 @@ def modern_gpt_train() -> None:
     best_path = model_dir / "best.pt"   
     last_path = model_dir / "last.pt"
 
+    ### Resume from last checkpoint if exists
+    resume_from = train_cfg.get("resume_from", None)
+    if resume_from:
+        resume_path = Path(resume_from).expanduser().resolve()
+        if not resume_path.exists():
+            raise FileNotFoundError(f"resume_from checkpoint not found: {resume_path}")
+        logger.info(f"[modern-gpt-train] Resuming weights from: {resume_path}")
+        state = torch.load(resume_path, map_location=device)
+        model.load_state_dict(state)
+        print(f"[modern-gpt-train] Loaded resume weights from: {resume_path}")
+
     # 5) Training loop
 
     # Encode validation set
@@ -213,8 +223,16 @@ def modern_gpt_train() -> None:
         val_lines = [line.strip() for line in f if line.strip()]
     val_encoded = [tokenizer.encode(l) for l in val_lines]
 
+    # ---- B) Initialize best_val from resumed model (or fresh model) ----
+    init_val = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
+
+    best_val = init_val
+    best_step = 0
+    torch.save(model.state_dict(), best_path)
+    print(f"[modern-gpt-train] Initial val={best_val:.4f} saved as best.pt")
+
     model.train()
-    for step in range(train_steps):
+    for step in range(1, train_steps+1):
         input_ids = make_batch(batch_size).to(device)
         pad_id = tokenizer.token_to_id("<pad>")
         full_attention_mask = (input_ids != pad_id).long()
@@ -236,7 +254,7 @@ def modern_gpt_train() -> None:
         if scheduler:
             scheduler.step()
 
-        if step % eval_interval == 0 or step < 20:
+        if step % eval_interval == 0:
             # print(f"Step {step}, Loss: {loss.item():.4f}")
             val_loss = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
             print(f"Step {step}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
@@ -278,7 +296,7 @@ def modern_gpt_train() -> None:
         json.dump(tokenizer.to_dict(), f, indent=2)
     print(f"[modern-gpt-train] Tokenizer saved to: {tokenizer_path}")
 
-    cfg["model_config"]["num_embeddings"] = len(tokenizer.vocab)
+    cfg["model_config"]["vocab_size"] = len(tokenizer.vocab)
     with config_path.open("w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")

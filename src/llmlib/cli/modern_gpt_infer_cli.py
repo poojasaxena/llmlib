@@ -130,7 +130,7 @@ def _generate_text_modern(
         generated.append(next_id)
         
         # Stop generation if EOS token is generated, but only after generating at least one token
-        if next_id == eos_id and i > 0:  # Allow at least one generation step
+        if next_id == eos_id:  # Allow at least one generation step
             if DEBUG:
                 print(f"[DEBUG] EOS token generated at position {i+1}, stopping generation")
             break
@@ -306,7 +306,7 @@ def modern_gpt_infer() -> None:
     model_dir = get_model_dir(cfg, create=False)
 
     # Use home directory as base for shorter, more readable paths
-    base_dir = Path.home() / "PoojaVault/Professional/Learning/NLP_and_LLMs/"
+    base_dir = Path.home() / "PoojaVault/Professional/"
 
     print("\n============================================================")
     print("🧠 Modern GPT Inference")

@@ -330,28 +330,29 @@ class TrainingPipeline:
                 time.sleep(30)
         
         raise TrainingPipelineError(f"Model training failed after {self.max_retries} attempts")
-    
+  
     def _test_inference(self):
-        """Test model inference."""
+        """Test model inference (non-interactive)."""
         logger.info("🎯 Step 3: Testing inference...")
         try:
-            cmd = ['modern-gpt-infer', '--config', str(self.config_path)]
-            process = subprocess.Popen(cmd, stdin=subprocess.PIPE, 
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
-                                     text=True)
-            
-            stdout, stderr = process.communicate(input="What is an elephant?\n", timeout=60)
-            
-            if process.returncode == 0:
+            cmd = [
+                'modern-gpt-infer',
+                '--config', str(self.config_path),
+                '--prompt', "What is an elephant?"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+            if result.returncode == 0:
                 logger.info("✅ Inference test completed")
-                logger.info(f"Model response: {stdout.strip()}")
+                logger.info(f"Model response:\n{result.stdout.strip()}")
             else:
-                logger.error(f"❌ Inference test failed: {stderr}")
-                
+                logger.error(f"❌ Inference test failed:\n{result.stderr.strip()}")
+
         except subprocess.TimeoutExpired:
             logger.error("❌ Inference test timed out")
         except Exception as e:
             logger.error(f"❌ Inference test error: {e}")
+
     
     def run(self):
         """Execute the complete training pipeline."""
