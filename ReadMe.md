@@ -8,6 +8,7 @@
   - [Running Tests](#running-tests)
   - [Working on the Code (reload changes)](#working-on-the-code-reload-changes)
   - [Building a Package (optional)](#building-a-package-optional)
+  - [complete Workflow](#complete-workflow)
 
 <!-- /TOC -->
 
@@ -133,3 +134,15 @@ pip install dist/llmlib-<version>-py3-none-any.whl
 ```
 * Version and filename are taken from pyproject.toml.
 
+
+## complete Workflow
+```
+# Step 1: Run the complete enhanced pipeline (THIS IS ALL YOU NEED!)
+run-data-pipeline
+
+# Step 2: Train tokenizer with enhanced dataset
+train-tokenizer experiments/v4_enhanced_pipeline/config.json
+
+# Step 3: Train model
+modern-gpt-train experiments/v4_enhanced_pipeline/config.json
+```

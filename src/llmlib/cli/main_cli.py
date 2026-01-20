@@ -1,18 +1,25 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Command-line interface for tiny GPT experiments.
+LLMLIB - Unified Command Line Interface
 
-Exposes two console scripts (via pyproject.toml):
+A comprehensive CLI for LLM training, inference, and utilities.
+This serves as the main entry point for the llmlib ecosystem.
 
-- tiny-gpt-train  --config path/to/project_config.json
-- tiny-gpt-infer  --config path/to/project_config.json [--prompt "hello"]
+Available commands:
+- train-pipeline: Robust end-to-end training pipeline
+- monitor: Training monitoring and system resources
+- train: Direct model training
+- infer: Model inference
+- tokenizer: Tokenizer training and utilities
 
-Both commands expect a nested project_config.json with:
-{
-  "model_config": {...},
-  "training_config": {...},
-  "project_metadata": {...}
-}
+Usage:
+    llmlib <command> [options]
+    
+Examples:
+    llmlib train-pipeline --config config.json --dry-run
+    llmlib monitor gpu
+    llmlib train --config config.json
+    llmlib infer --config config.json --prompt "Hello world"
 """
 
 from __future__ import annotations

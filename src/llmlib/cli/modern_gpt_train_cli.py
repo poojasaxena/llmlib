@@ -8,15 +8,28 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim import lr_scheduler
 
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_split_path
-from llmlib.utils.config_util import load_nested_config
+from llmlib.utils.config_util import load_config
 from llmlib.utils.checkpoint import save_model
 from llmlib.tokenization.registry import load_tokenizer
 from llmlib.utils.logger import get_logger
+from llmlib.utils.path_util import get_model_dir
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------
+def _load_nested_project_config(config_path: Path) -> dict:
+    cfg = load_config(caller_file=str(config_path), config_filename=config_path.name)
+    for key in ("model_config", "training_config", "project_metadata"):
+        if key not in cfg:
+            logger.error(f"Missing '{key}' in project_config: {config_path}")
+            raise ValueError(f"Missing '{key}' in project_config: {config_path}")
+    return cfg
 
 
 def _select_device(device_arg: str | None) -> str:
@@ -55,10 +68,36 @@ def modern_gpt_train() -> None:
     logger.info(f"[modern-gpt-train] Using device: {device}")
 
     # 1) Load nested config
-    cfg = load_nested_config(caller_file=str(config_path), config_filename=config_path.name)
+    cfg       = _load_nested_project_config(config_path)
     model_cfg = cfg["model_config"]
     train_cfg = cfg["training_config"]
-    meta_cfg = cfg["project_metadata"]
+    meta_cfg  = cfg["project_metadata"]
+
+    es_cfg       = train_cfg.get("early_stopping", {})
+    es_enabled   = es_cfg.get("enabled", False)
+    es_patience  = es_cfg.get("patience_evals", 0)
+    es_min_delta = es_cfg.get("min_delta", 0.0)
+
+    no_improve_evals = 0
+
+    ### Normalization
+    # --- Normalize vocab size naming ---
+    if "vocab_size" in model_cfg and "num_embeddings" in model_cfg:
+        if model_cfg["vocab_size"] != model_cfg["num_embeddings"]:
+            raise ValueError(
+                f"Config mismatch: vocab_size={model_cfg['vocab_size']} "
+                f"but num_embeddings={model_cfg['num_embeddings']}"
+            )
+
+    vocab_size = model_cfg.get("vocab_size", model_cfg.get("num_embeddings"))
+    if vocab_size is None:
+        raise ValueError(
+            "model_config must define either 'vocab_size' or 'num_embeddings'"
+        )
+
+    # Write back normalized form (optional but recommended)
+    model_cfg["vocab_size"] = vocab_size
+
 
     # 2) Load dataset
     data_path = get_data_split_path(cfg, "data_file")
@@ -103,7 +142,20 @@ def modern_gpt_train() -> None:
     )
 
     model = ModernGPTModel(config).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=train_cfg.get("weight_decay", 0.0),
+    )
+
+    # Learning rate scheduler
+    lr_scheduler_type = train_cfg.get("lr_scheduler", "constant")
+    if lr_scheduler_type == "cosine":
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_steps, eta_min=0)
+    elif lr_scheduler_type == "onecycle":
+        scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate, total_steps=train_steps)
+    else:
+        scheduler = None
 
     pad_id = tokenizer.token_to_id("<pad>")
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
@@ -121,6 +173,7 @@ def modern_gpt_train() -> None:
     print(f"batch_size       : {batch_size}")
     print(f"learning_rate    : {learning_rate}")
     print(f"train_steps      : {train_steps}")
+    print(f"LR Scheduler     : {lr_scheduler_type}")
     print("============================================================\n")
 
     ## 4) Batching helper
@@ -142,6 +195,12 @@ def modern_gpt_train() -> None:
         ]
 
         return torch.stack(padded, dim=0)
+
+    best_val = float("inf")
+    best_step = -1
+    model_dir = get_model_dir(cfg, create=True)
+    best_path = model_dir / "best.pt"   
+    last_path = model_dir / "last.pt"
 
     # 5) Training loop
 
@@ -174,12 +233,42 @@ def modern_gpt_train() -> None:
         loss.backward()
         optimizer.step()
 
+        if scheduler:
+            scheduler.step()
+
         if step % eval_interval == 0 or step < 20:
             # print(f"Step {step}, Loss: {loss.item():.4f}")
             val_loss = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
             print(f"Step {step}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
 
+            # Always save last
+            torch.save(model.state_dict(), last_path)
+
+            improved = (best_val - val_loss) > es_min_delta
+            if improved:
+                best_val = val_loss
+                best_step = step
+                no_improve_evals = 0
+                torch.save(model.state_dict(), best_path)
+                print(f"[modern-gpt-train] New best saved at step {step} (val={best_val:.4f})")
+            else:
+                no_improve_evals += 1
+
+            # Early stopping decision (only checked on eval steps)
+            if es_enabled and no_improve_evals >= es_patience:
+                print(
+                    f"[modern-gpt-train] Early stopping at step {step}. "
+                    f"Best val={best_val:.4f} at step {best_step}."
+                )
+                break
+    print(f"[modern-gpt-train] Training complete. Best val={best_val:.4f} at step {best_step}.")
+
     # 6) Save model
+    # Load best weights before final save (canonical model.pt)
+    if best_path.exists():
+        model.load_state_dict(torch.load(best_path, map_location=device))
+        model.to(device)
+        model.eval()
     ckpt_path = save_model(model, cfg)
     print(f"\n[modern-gpt-train] Model saved to: {ckpt_path}")
 
@@ -190,9 +279,10 @@ def modern_gpt_train() -> None:
     print(f"[modern-gpt-train] Tokenizer saved to: {tokenizer_path}")
 
     cfg["model_config"]["num_embeddings"] = len(tokenizer.vocab)
-    save_model(model, cfg)  # optional: overwrite config with correct vocab
-
-
+    with config_path.open("w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    print(f"[modern-gpt-train] Updated config saved to: {config_path}")
 
 @torch.no_grad()
 def compute_val_loss(
@@ -219,7 +309,8 @@ def compute_val_loss(
         x = torch.tensor(ids[:-1], dtype=torch.long, device=device).unsqueeze(0)
         y = torch.tensor(ids[1:], dtype=torch.long, device=device).unsqueeze(0)
 
-        logits = model(x)
+        mask = (x != pad_id).long()
+        logits = model(x, attention_mask=mask)
 
         loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
         losses.append(loss.item())

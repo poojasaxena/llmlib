@@ -52,69 +52,15 @@ def sample_from_logits(logits_1d, top_k=None, temperature=1.0, avoid_tokens=None
         return torch.multinomial(probs, 1).item()
 
 
-def generate_simple(
-    model,
-    tokenizer,
-    prompt,
-    max_seq_len=128,
-    max_new_tokens=50,
-    top_k=50):
-    model.eval()
-    device = next(model.parameters()).device
-
-    input_ids = tokenizer.encode(prompt)
-    if not input_ids:
-        return prompt
-    
-    eos_id = tokenizer.token_to_id("<eos>")  # Get actual EOS token ID
-    
-    # Remove trailing EOS token if the tokenizer added it
-    if input_ids and input_ids[-1] == eos_id:
-        input_ids = input_ids[:-1]
-        if DEBUG:
-            print(f"[DEBUG] Removed EOS from input tokens")
-    
-    generated = input_ids.copy()  # Start with Python list for easier appending
-
-    for i in range(max_new_tokens):
-        # Take the last max_seq_len tokens
-        context = generated[-max_seq_len:] if len(generated) > max_seq_len else generated
-        context_tensor = torch.tensor([context], dtype=torch.long, device=device)  # shape (1, seq_len)
-
-        with torch.no_grad():
-            logits = model(context_tensor)  # Get logits from model
-            next_logits = logits[0, -1]  # Get last position logits
-
-        # Apply temperature and top-k sampling
-        # Penalize EOS token for first few generations to force content generation
-        avoid_tokens = []
-        if i < 3:  # Avoid EOS for first 3 tokens
-            avoid_tokens = [eos_id]
-            
-        next_id = sample_from_logits(next_logits, top_k=top_k, temperature=1.0, avoid_tokens=avoid_tokens)
-
-        generated.append(next_id)
-        
-        # Debug: print first few tokens to see if generation is working
-        if DEBUG and i < 3:
-            print(f"Generated token {i+1}: {next_id}")
-            
-        # Stop if EOS token is generated, but only after generating at least one token
-        if next_id == eos_id and i > 0:  # Allow at least one generation step
-            if DEBUG:
-                print(f"EOS token generated, stopping generation")
-            break
-
-    return tokenizer.decode(generated)
-
-
 def _generate_text_modern(
     model: ModernGPTModel,
     tokenizer: ByteBPETokenizer,
     prompt: str,
     max_seq_len: int,
     max_new_tokens: int,
-    temperature: float) -> str:
+    temperature: float,
+    top_k: int | None,
+    avoid_eos_first_n: int) -> str:
     """
     Generate text with top-k / top-p sampling using Byte-level BPE tokenizer.
     """
@@ -167,12 +113,14 @@ def _generate_text_modern(
 
             # Apply temperature and sample
             # Penalize EOS token for first few generations to force content generation
-            avoid_tokens = []
-            if i < 3:  # Avoid EOS for first 3 tokens
-                avoid_tokens = [eos_id]
-            
-            actual_temp = max(temperature, 0.9)  # Moderate temperature
-            next_id = sample_from_logits(next_logits, top_k=50, temperature=actual_temp, avoid_tokens=avoid_tokens)
+            avoid_tokens = [eos_id] if i < avoid_eos_first_n else []
+            next_id = sample_from_logits(
+                               next_logits,
+                               top_k=top_k,
+                               temperature=temperature,
+                               avoid_tokens=avoid_tokens
+                    )
+
             
             if DEBUG and i < 5:  # Debug first few generations
                 print(f"[DEBUG] Generated token {i+1}: {next_id}")
@@ -191,8 +139,12 @@ def _generate_text_modern(
         print(f"[DEBUG] Final generated tokens: {generated}")
         print(f"[DEBUG] Generated {len(generated) - len(input_ids)} new tokens")
 
-    full_text = tokenizer.decode(generated)
-    return full_text
+    
+    new_tokens = generated[len(input_ids):]
+    return tokenizer.decode(new_tokens)
+
+    #full_text = tokenizer.decode(generated)
+    #return full_text
 
 
 # ---------------------------------------------------------
@@ -205,7 +157,7 @@ def _select_device(device_arg: str | None) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def debug_model_generation(model, tokenizer, device):
+def debug_model_generation(model, tokenizer, temperature, device):
     """Debug function to test basic model generation"""
     print("\n=== DEBUG MODEL GENERATION ===")
     
@@ -234,7 +186,7 @@ def debug_model_generation(model, tokenizer, device):
         print(f"Top 10 values: {top_values.tolist()}")
         
         # Sample a token
-        probs = torch.softmax(next_logits / 1.0, dim=-1)
+        probs = torch.softmax(next_logits / temperature, dim=-1)
         sampled_id = torch.multinomial(probs, 1).item()
         print(f"Sampled token ID: {sampled_id}")
     
@@ -283,18 +235,31 @@ def modern_gpt_infer() -> None:
     logger.info(f"[modern-gpt-infer] Using device: {device}")
 
     cfg = load_nested_config(caller_file=str(config_path), config_filename=config_path.name)
+    infer_cfg = validate_inference_config(cfg)
     meta_cfg = cfg["project_metadata"]
 
     max_seq_len = meta_cfg["max_seq_length"]
-    max_new_tokens = meta_cfg.get("max_new_tokens", 40)
+    max_new_tokens = meta_cfg["max_new_tokens"]
+
+    ## Inference parameters
+    temperature = infer_cfg["temperature"]
+    top_k = infer_cfg["top_k"]
+    avoid_eos_first_n = infer_cfg["avoid_eos_first_n"]
+    seed = infer_cfg["seed"]
+    if seed is not None:
+        import random
+        import numpy as np
+        torch.manual_seed(seed)
+        random.seed(seed)
+        np.random.seed(seed)
 
     # Load model using checkpoint utility
     model = load_model(
-        model_cls=ModernGPTModel,
-        config_cls=ModernGPTConfig,
-        project_config=cfg,
-        device=device,
-        eval_mode=True
+        model_cls       = ModernGPTModel,
+        config_cls      = ModernGPTConfig,
+        project_config  = cfg,
+        device          = device,
+        eval_mode       = True
     )
 
     if DEBUG:
@@ -324,12 +289,24 @@ def modern_gpt_infer() -> None:
     f"but tokenizer vocab={len(tokenizer.vocab)}"
     )
 
+    def gen(p: str) -> str:
+        return _generate_text_modern(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=p,
+        max_seq_len=max_seq_len,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        avoid_eos_first_n=avoid_eos_first_n,
+    )
+
     # Get model directory for display
     from llmlib.utils.path_util import get_model_dir, short_path
     model_dir = get_model_dir(cfg, create=False)
 
     # Use home directory as base for shorter, more readable paths
-    base_dir = Path.home() / "PoojaVault/Professional/"
+    base_dir = Path.home() / "PoojaVault/Professional/Learning/NLP_and_LLMs/"
 
     print("\n============================================================")
     print("🧠 Modern GPT Inference")
@@ -346,26 +323,20 @@ def modern_gpt_infer() -> None:
     print(f"Max new tokens     : {max_new_tokens}")
     print("============================================================\n")
 
+    
     # Debug the model generation first
     if DEBUG:
-        debug_model_generation(model, tokenizer, device)
+        debug_model_generation(model, tokenizer, temperature, device)
 
-        print("Testing simple generation:")
-        print(f"elephant -> {generate_simple(model, tokenizer, 'elephant')}")
-        print(f"The elephant is -> {generate_simple(model, tokenizer, 'The elephant is')}")
-        print(f"In the wild, elephants -> {generate_simple(model, tokenizer, 'In the wild, elephants')}")
+        print("Testing generation:")
+        print(f"elephant -> {gen('elephant')}")
+        print(f"The elephant is -> {gen('The elephant is')}")
+        print(f"In the wild, elephants -> {gen('In the wild, elephants')}")
 
     # Interactive prompt loop or single generation
     if args.prompt:
         # Single prompt mode
-        output = _generate_text_modern(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=args.prompt,
-            max_seq_len=max_seq_len,
-            max_new_tokens=max_new_tokens,
-            temperature=0.8
-        )
+        output = gen(args.prompt)
         print("---")
         print(f"Prompt : {args.prompt}")
         print(f"Output : {output}")
@@ -387,14 +358,7 @@ def modern_gpt_infer() -> None:
                     break
 
                 # Generate text
-                output = _generate_text_modern(
-                    model=model,
-                    tokenizer=tokenizer,
-                    prompt=prompt,
-                    max_seq_len=max_seq_len,
-                    max_new_tokens=max_new_tokens,
-                    temperature=0.8
-                )
+                output = gen(prompt)
 
                 print("---")
                 print(f"Prompt : {prompt}")
@@ -403,3 +367,24 @@ def modern_gpt_infer() -> None:
 
         except KeyboardInterrupt:
             print("\n\nInterrupted by user. Goodbye! 👋")
+
+   
+
+def validate_inference_config(cfg: dict) -> dict:
+    if "inference_config" not in cfg:
+        raise ValueError("Missing required 'inference_config' in config")
+
+    infer = cfg["inference_config"]
+
+    required = (
+        "seed",
+        "temperature",
+        "top_k",
+        "avoid_eos_first_n",
+    )
+
+    for k in required:
+        if k not in infer:
+            raise ValueError(f"Missing inference_config key: '{k}'")
+
+    return infer

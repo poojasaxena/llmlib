@@ -4,11 +4,11 @@ build-backend   = "setuptools.build_meta"
 
 [project]
 name            = "llmlib"
-version         = "2.6.0"
+version         = "3.1.4"
 description     = "Pooja's LLM utilities and tiny transformer library"
 readme          = "ReadMe.md"
 requires-python = ">=3.10"
-dependencies    = []
+dependencies    = ["psutil>=5.9.0"]
 
 
 
@@ -22,8 +22,23 @@ train-tokenizer = "llmlib.cli.train_tokenizer_cli:main"
 modern-gpt-train = "llmlib.cli.modern_gpt_train_cli:modern_gpt_train"
 modern-gpt-infer = "llmlib.cli.modern_gpt_infer_cli:modern_gpt_infer"
 
-### Data Pipeline CLI entry
+### Training Pipeline CLI entries
+llmlib-train-pipeline = "llmlib.cli.train_pipeline_cli:main"
+llmlib-monitor = "llmlib.cli.monitor_cli:main"
+llmlib-validate = "llmlib.cli.validate_simple_cli:main"
+llmlib-tmux = "llmlib.cli.tmux_cli:main"
+
+### Unified CLI entry point
+llmlib = "llmlib.cli.main_unified_cli:main"
+
+### Sleep Prevention CLI entries
+llmlib-disable-sleep = "llmlib.cli.sleep_prevention_cli:disable_sleep"
+llmlib-enable-sleep = "llmlib.cli.sleep_prevention_cli:enable_sleep"
+
+### Data Pipeline CLI entries
 run-data-pipeline = "llmlib.data.pipeline.run_full_data_pipeline:main"
+run-data-generation = "llmlib.data.run_data_generation:main"
+test-data-pipeline = "llmlib.data.test_enhanced_pipeline:main"
 
 [tool.setuptools]
 package-dir     = {"" = "src"}

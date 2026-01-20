@@ -6,10 +6,12 @@ from pathlib import Path
 import json
 import torch
 from typing import Type
+from .path_util import get_model_dir
 
-from llmlib.utils.path_util import get_model_dir  # your refactored path helper
-
-def save_model(model, project_config: dict, config_filename: str = "model_config.json") -> Path:
+def save_model(model, 
+               project_config: dict, 
+               config_filename: str = "model_config.json",
+               ckpt_name:str='model.pt') -> Path:
     """
     Save any PyTorch model with a nested config snapshot.
 
@@ -23,7 +25,7 @@ def save_model(model, project_config: dict, config_filename: str = "model_config
     """
 
     model_dir = get_model_dir(project_config)
-    ckpt_path = model_dir / "model.pt"
+    ckpt_path = model_dir / ckpt_name
     cfg_path = model_dir / config_filename
 
     # 1) Save weights
@@ -62,6 +64,7 @@ def load_model(
     config_filename: str = "model_config.json",
     device: str = "cpu",
     eval_mode: bool = False,
+    ckpt_filename: str = "model.pt",
 ):
     """
     Load any PyTorch model saved with save_model.
@@ -77,9 +80,8 @@ def load_model(
     Returns:
         Loaded model instance on the requested device
     """
-
     model_dir = get_model_dir(project_config)
-    ckpt_path = model_dir / "model.pt"
+    ckpt_path = model_dir / ckpt_filename
     cfg_path = model_dir / config_filename
 
     if not ckpt_path.exists():

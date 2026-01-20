@@ -1,0 +1,33 @@
+ ~/Poo/Pr/L/N/Transfomers_Foundation/course4/projects  main ?5  tmux list-windows   1 ✘  ▼  llm_course Py  15:09:45
+display-menu         menu                     -- display a menu
+display-message      display                  -- display a message in the status line
+display-panes        displayp                 -- display an indicator for each visible pane
+display-popup        popup                    -- display a popup box over a pane
+find-window          findw                    -- search for a pattern in windows
+has-session          has                      -- check and report if a session exists on the server
+if-shell             if                       -- execute a tmux command if a shell-command succeeded
+join-pane            move-pane  joinp  movep  -- split a pane and move an existing one into the new space
+kill-pane            killp                    -- destroy a given pane
+kill-server                                   -- kill clients, sessions and server
+kill-session                                  -- destroy a given session
+kill-window          killw                    -- destroy a given window
+last-pane            lastp                    -- select the previously selected pane
+last-window          last                     -- select the previously selected window
+link-window          linkw                    -- link a window to another
+list-buffers         lsb                      -- list paste buffers of a session
+list-clients         lsc                      -- list clients attached to server
+list-commands        lscm                     -- list supported sub-commands
+list-keys            lsk                      -- list all key-bindings
+list-panes           lsp                      -- list panes of a window
+list-sessions        ls                       -- list sessions managed by server
+list-windows         lsw                      -- list windows of a session
+load-buffer          loadb                    -- load a file into a paste buffer
+lock-client          lockc                    -- lock a client
+lock-server          lock                     -- lock all clients attached to the server
+lock-session         locks                    -- lock all clients attached to a session
+move-window          movew                    -- move a window to another
+new-session          new                      -- create a new session
+new-window           neww                     -- create a new window
+next-layout          nextl                    -- move a window to the next layout
+next-window          next                     -- move to the next window in a session
+line 38/88 43%
