@@ -7,20 +7,106 @@ import os
 from .config_util import _meta
 
 # ---------------------------------------------------------------------
+# 0. Base path utilities for readable output
+# ---------------------------------------------------------------------
+def get_base_path() -> Path:
+    """
+    Return the base path for shortening long paths in output.
+    Uses your existing WORKBENCH_ROOT or LEARNING_ROOT as appropriate.
+    """
+    # Try WORKBENCH_ROOT first (most common)
+    workbench = os.environ.get("WORKBENCH_ROOT")
+    if workbench:
+        return Path(workbench).expanduser().resolve()
+    
+    # Try LEARNING_ROOT as fallback
+    learning = os.environ.get("LEARNING_ROOT")
+    if learning:
+        return Path(learning).expanduser().resolve()
+    
+    # Last resort fallback
+    return Path.home() / "PoojaVault/Professional"
+
+def shorten_path(path: Path | str, max_length: int = 80) -> str:
+    """
+    Shorten a path for display using your environment variables.
+    
+    Priority:
+    1. Relative to $WORKBENCH_ROOT → $WORKBENCH_ROOT/...
+    2. Relative to $LEARNING_ROOT → $LEARNING_ROOT/...
+    3. Relative to home → ~/...
+    4. Truncate if still too long
+    """
+    p = Path(path).resolve() if Path(path).exists() else Path(path)
+    home = Path.home()
+    
+    # Try WORKBENCH_ROOT
+    workbench = os.environ.get("WORKBENCH_ROOT")
+    if workbench:
+        try:
+            workbench_path = Path(workbench).expanduser().resolve()
+            rel_to_workbench = p.relative_to(workbench_path)
+            result = f"$WORKBENCH_ROOT/{rel_to_workbench}"
+            if len(result) <= max_length:
+                return result
+        except ValueError:
+            pass
+    
+    # Try LEARNING_ROOT
+    learning = os.environ.get("LEARNING_ROOT") 
+    if learning:
+        try:
+            learning_path = Path(learning).expanduser().resolve()
+            rel_to_learning = p.relative_to(learning_path)
+            result = f"$LEARNING_ROOT/{rel_to_learning}"
+            if len(result) <= max_length:
+                return result
+        except ValueError:
+            pass
+    
+    # Try relative to home
+    try:
+        rel_to_home = p.relative_to(home)
+        result = f"~/{rel_to_home}"
+        if len(result) <= max_length:
+            return result
+    except ValueError:
+        pass
+    
+    # If still too long, truncate with ...
+    path_str = str(p)
+    if len(path_str) <= max_length:
+        return path_str
+    
+    # Show .../<last_parts>
+    parts = p.parts
+    for i in range(len(parts)):
+        truncated = ".../" + "/".join(parts[i:])
+        if len(truncated) <= max_length:
+            return truncated
+    
+    # Last resort: just truncate
+    return path_str[:max_length-3] + "..."
+
+# ---------------------------------------------------------------------
 # 1. Global datasets directory helpers
 # ---------------------------------------------------------------------
 def get_global_datasets_dir() -> Path:
     """
     Return the base directory where all datasets are stored.
-
-    Priority:
-    1. $GLOBAL_DATASETS_DIR
-    2. Fallback: ~/datasets
+    Uses your GLOBAL_DATASETS_DIR environment variable.
     """
     env_root = os.environ.get("GLOBAL_DATASETS_DIR")
     if env_root:
         return Path(env_root).expanduser()
-    return Path.home() / "datasets"
+    
+    # Fallback using your WORKBENCH_ROOT structure
+    workbench = os.environ.get("WORKBENCH_ROOT")
+    if workbench:
+        return Path(workbench).expanduser() / "Datasets"
+    
+    # Last resort
+    return Path.home() / "PoojaVault/Professional/Workbench/Datasets"
 
 
 def get_data_dir(project_config: dict) -> Path:
@@ -80,15 +166,19 @@ def get_data_split_path(project_config: dict, split: str) -> Path:
 def get_global_model_dir() -> Path:
     """
     Return the base directory where all models are stored.
-
-    Priority:
-    1. $GLOBAL_MODELS_DIR (global, recommended)
-    2. Fallback: ~/.llm_models
+    Uses your GLOBAL_MODELS_DIR environment variable.
     """
     env_root = os.environ.get("GLOBAL_MODELS_DIR")
     if env_root:
         return Path(env_root).expanduser()
-    return Path.home() / ".llm_models"
+    
+    # Fallback using your WORKBENCH_ROOT structure
+    workbench = os.environ.get("WORKBENCH_ROOT")
+    if workbench:
+        return Path(workbench).expanduser() / "Models"
+    
+    # Last resort
+    return Path.home() / "PoojaVault/Professional/Workbench/Models"
 
 
 def get_model_dir(project_config: dict, create: bool = True) -> Path:
@@ -133,6 +223,7 @@ def get_model_paths(project_config: dict, create_dir: bool = True):
 
 
 def short_path(p: Path, base: Path) -> str:
+    """Legacy function - use shorten_path() for better display formatting."""
     try:
         return str(p.relative_to(base))
     except ValueError:

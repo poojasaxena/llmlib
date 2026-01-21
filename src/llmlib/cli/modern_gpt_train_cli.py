@@ -8,17 +8,24 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_split_path
 from llmlib.utils.config_util import load_config
-from llmlib.utils.checkpoint import save_model
+from llmlib.utils.checkpoint import save_model, resume_checkpoint_if_available, pack_checkpoint
 from llmlib.tokenization.registry import load_tokenizer
 from llmlib.utils.logger import get_logger
-from llmlib.utils.path_util import get_model_dir, resolve_checkpoint_path, short_path
+from llmlib.utils.path_util import get_model_dir
 from llmlib.training.lr_schedulers import build_lr_scheduler
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------
+# Data Sanity Check Import
+# ---------------------------------------------------------
+from llmlib.data.sanity_checks import run_data_sanity_checks
+
 
 # ---------------------------------------------------------
 # Utilities
@@ -46,6 +53,7 @@ def modern_gpt_train() -> None:
     Train a Modern GPT model from the command line.
 
         modern-gpt-train --config /path/to/project_config.json [--device cpu|cuda]
+        modern-gpt-train --config /path/to/project_config.json --data-checks-only
     """
     parser = argparse.ArgumentParser(description="Train a Modern GPT model.")
     parser.add_argument(
@@ -58,20 +66,36 @@ def modern_gpt_train() -> None:
         default="auto",
         help="Device to use",
     )
+    parser.add_argument(
+        "--data-checks-only",
+        action="store_true",
+        help="Run only data sanity checks and exit (no training)"
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser().resolve()
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    device = _select_device(args.device)
-    logger.info(f"[modern-gpt-train] Using device: {device}")
-
     # 1) Load nested config
     cfg       = _load_nested_project_config(config_path)
     model_cfg = cfg["model_config"]
     train_cfg = cfg["training_config"]
     meta_cfg  = cfg["project_metadata"]
+
+    # Load tokenizer for data checks
+    tokenizer = load_tokenizer(cfg)  # pass the full project config
+    
+    # Run data sanity checks
+    run_data_sanity_checks(cfg, tokenizer)
+    
+    # If only data checks requested, exit here
+    if args.data_checks_only:
+        print("✅ Data sanity checks completed. Exiting (--data-checks-only flag used).")
+        return
+
+    device = _select_device(args.device)
+    logger.info(f"[modern-gpt-train] Using device: {device}")
 
     es_cfg       = train_cfg.get("early_stopping", {})
     es_enabled   = es_cfg.get("enabled", False)
@@ -104,8 +128,6 @@ def modern_gpt_train() -> None:
 
     with data_path.open("r", encoding="utf-8") as f:
         text = f.read()
-
-    tokenizer = load_tokenizer(cfg)  # pass the full project config
 
     assert model_cfg["vocab_size"] == len(tokenizer.vocab), (
         f"Config vocab_size={model_cfg['vocab_size']} "
@@ -156,7 +178,6 @@ def modern_gpt_train() -> None:
         scheduler_cfg=train_cfg.get("lr_scheduler"),
     )
 
-
     pad_id = tokenizer.token_to_id("<pad>")
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
     sched_cfg = train_cfg.get("lr_scheduler", {"type": "constant"})
@@ -203,17 +224,16 @@ def modern_gpt_train() -> None:
     best_path = model_dir / "best.pt"   
     last_path = model_dir / "last.pt"
 
-    ### Resume from last checkpoint if exists
-    resume_from = train_cfg.get("resume_from")
-    if resume_from:
-        resume_path = resolve_checkpoint_path(cfg, resume_from)
-        if not resume_path.exists():
-            raise FileNotFoundError(f"resume_from checkpoint not found: {resume_path}")
-
-        logger.info(f"[modern-gpt-train] Resuming weights from: {resume_path}")
-        state = torch.load(resume_path, map_location=device)
-        model.load_state_dict(state)
-        print(f"[modern-gpt-train] Loaded resume weights from: {resume_path}")
+    # Resume from checkpoint if available
+    start_step, best_val, best_step = resume_checkpoint_if_available(
+        cfg=cfg,
+        train_cfg=train_cfg,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        logger=logger,
+    )
 
     # 5) Training loop
 
@@ -229,13 +249,47 @@ def modern_gpt_train() -> None:
     # ---- B) Initialize best_val from resumed model (or fresh model) ----
     init_val = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
 
-    best_val = init_val
-    best_step = 0
-    torch.save(model.state_dict(), best_path)
-    print(f"[modern-gpt-train] Initial val={best_val:.4f} saved as best.pt")
+    # If resuming, keep previous best unless current model is better
+    if init_val < best_val:
+        best_val = init_val
+        best_step = start_step
+    print(f"[modern-gpt-train] Initial val={init_val:.4f} (best_val={best_val:.4f})")
+
+    # Save an initial snapshot (best + last) for this run
+
+    torch.save(
+        pack_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            step=start_step,
+            best_val=best_val,
+            best_step=best_step,
+        ),
+        best_path,
+        )
+
+    torch.save(
+        pack_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            step=start_step,
+            best_val=best_val,
+            best_step=best_step,
+        ),
+        last_path,
+    )
 
     model.train()
-    for step in range(1, train_steps+1):
+
+    end_step = start_step + train_steps
+    if end_step <= start_step:
+        logger.warning(f"[modern-gpt-train] Nothing to do: start_step={start_step}, train_steps={train_steps}")
+        return
+
+    for step in range(start_step + 1, end_step + 1):
+
         input_ids = make_batch(batch_size).to(device)
         pad_id = tokenizer.token_to_id("<pad>")
         full_attention_mask = (input_ids != pad_id).long()
@@ -252,26 +306,55 @@ def modern_gpt_train() -> None:
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
         optimizer.step()
 
         if scheduler:
             scheduler.step()
 
         if step % eval_interval == 0:
+
+            lr = optimizer.param_groups[0]["lr"]
+
             # print(f"Step {step}, Loss: {loss.item():.4f}")
             val_loss = compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device)
-            print(f"Step {step}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
+            print(
+                f"Step {step}, LR: {lr:.2e}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}"
+            )
 
             # Always save last
-            torch.save(model.state_dict(), last_path)
+            torch.save(
+                pack_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    step=step,
+                    best_val=best_val,
+                    best_step=best_step,
+                ),
+                last_path,
+            )
 
+            # Check for improvement
             improved = (best_val - val_loss) > es_min_delta
             if improved:
                 best_val = val_loss
                 best_step = step
                 no_improve_evals = 0
-                torch.save(model.state_dict(), best_path)
+                torch.save(
+                    pack_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        step=step,
+                        best_val=best_val,
+                        best_step=best_step,
+                    ),
+                    best_path,
+                )
                 print(f"[modern-gpt-train] New best saved at step {step} (val={best_val:.4f})")
+
             else:
                 no_improve_evals += 1
 
@@ -287,7 +370,11 @@ def modern_gpt_train() -> None:
     # 6) Save model
     # Load best weights before final save (canonical model.pt)
     if best_path.exists():
-        model.load_state_dict(torch.load(best_path, map_location=device))
+        best_obj = torch.load(best_path, map_location=device)
+        if isinstance(best_obj, dict) and "model" in best_obj:
+            model.load_state_dict(best_obj["model"])
+        else:
+            model.load_state_dict(best_obj)  # backward compat
         model.to(device)
         model.eval()
     ckpt_path = save_model(model, cfg)
@@ -305,36 +392,49 @@ def modern_gpt_train() -> None:
         f.write("\n")
     print(f"[modern-gpt-train] Updated config saved to: {config_path}")
 
-@torch.no_grad()
-def compute_val_loss(
-    model,
-    tokenizer,
-    val_encoded,
-    max_seq_len,
-    device):
 
+@torch.no_grad()
+def compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device):
     model.eval()
 
     pad_id = tokenizer.token_to_id("<pad>")
     bos_id = tokenizer.token_to_id("<bos>")
     eos_id = tokenizer.token_to_id("<eos>")
 
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
+    # IMPORTANT: use reduction="sum" so we can do true token-weighted averaging
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id, reduction="sum")
 
-    losses = []
+    loss_sum = 0.0
+    token_count = 0
 
     for seq in val_encoded:
         # Add BOS/EOS + truncate
         ids = [bos_id] + seq[: max_seq_len - 2] + [eos_id]
 
-        x = torch.tensor(ids[:-1], dtype=torch.long, device=device).unsqueeze(0)
-        y = torch.tensor(ids[1:], dtype=torch.long, device=device).unsqueeze(0)
+        x = torch.tensor(ids[:-1], dtype=torch.long, device=device).unsqueeze(
+            0
+        )  # (1, T)
+        y = torch.tensor(ids[1:], dtype=torch.long, device=device).unsqueeze(
+            0
+        )  # (1, T)
 
         mask = (x != pad_id).long()
-        logits = model(x, attention_mask=mask)
+        logits = model(x, attention_mask=mask)  # (1, T, vocab)
 
+        # criterion returns SUM over tokens (since reduction="sum")
         loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-        losses.append(loss.item())
+
+        # Number of target tokens that contribute to loss:
+        # In your val setup there is no padding, so it's just y.numel()
+        n_tokens = y.numel()
+
+        loss_sum += loss.item()
+        token_count += n_tokens
 
     model.train()
-    return sum(losses) / len(losses)
+    return loss_sum / max(1, token_count)
+
+
+# ---------------------------------------------------------
+# CLI Entry Points  
+# ---------------------------------------------------------

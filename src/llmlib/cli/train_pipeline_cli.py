@@ -24,6 +24,7 @@ from typing import Dict, Any, Tuple
 
 from llmlib.utils.logger import get_logger
 from llmlib.utils.config_util import load_nested_config
+from llmlib.utils.path_util import resolve_checkpoint_path, shorten_path
 
 logger = get_logger(__name__)
 
@@ -58,9 +59,8 @@ class TrainingPipeline:
             raise TrainingPipelineError(f"Config file not found: {self.config_path}")
             
         try:
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-            logger.info(f"✅ Config loaded: {self.config_path}")
+            config = load_nested_config(str(self.config_path), self.config_path.name)
+            print(f"✅ Config loaded: {shorten_path(self.config_path)}")
             return config
         except Exception as e:
             raise TrainingPipelineError(f"Failed to load config: {e}")
@@ -107,7 +107,7 @@ class TrainingPipeline:
         import shutil
         
         logger.info("🤖 Starting Robust LLM Training Pipeline")
-        logger.info(f"📅 Started at: {datetime.now()}")
+        logger.info(f"📅 Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"🖥️  Host: {os.uname().nodename}")
         
         # Check disk space
@@ -137,29 +137,29 @@ class TrainingPipeline:
     
     def _validate_paths(self) -> bool:
         """Perform comprehensive path validation."""
-        logger.info("🔍 === DRY RUN: Validating all paths and dependencies ===")
+        print("🔍 === DRY RUN: Validating all paths and dependencies ===")
         
         all_valid = True
         
         # Check config
-        logger.info(f"✅ Config file: {self.config_path}")
+        print(f"✅ Config file: {shorten_path(self.config_path)}")
         
         # Check tokenizer
         tokenizer_path = self.paths['tokenizer']
         if tokenizer_path.exists():
-            logger.info(f"✅ Tokenizer EXISTS: {tokenizer_path}")
+            print(f"✅ Tokenizer EXISTS: {shorten_path(tokenizer_path)}")
             self.tokenizer_exists = True
         else:
-            logger.info(f"🔧 Tokenizer MISSING (will be trained): {tokenizer_path}")
-            logger.info(f"   📁 Parent directory exists: {tokenizer_path.parent.exists()}")
+            print(f"🔧 Tokenizer MISSING (will be trained): {shorten_path(tokenizer_path)}")
+            print(f"   📁 Parent directory exists: {tokenizer_path.parent.exists()}")
             self.tokenizer_exists = False
         
         # Check model directory
         model_path = self.paths['model']
         if model_path.exists():
-            logger.info(f"📁 Model directory EXISTS: {model_path}")
+            print(f"📁 Model directory EXISTS: {shorten_path(model_path)}")
         else:
-            logger.info(f"📁 Model directory MISSING (will be created): {model_path}")
+            print(f"📁 Model directory MISSING (will be created): {shorten_path(model_path)}")
             model_path.mkdir(parents=True, exist_ok=True)
         
         # Check training data
@@ -168,12 +168,12 @@ class TrainingPipeline:
             try:
                 with open(train_file, 'r') as f:
                     line_count = sum(1 for _ in f)
-                logger.info(f"✅ Training data EXISTS: {train_file} ({line_count:,} lines)")
+                print(f"✅ Training data EXISTS: {shorten_path(train_file)} ({line_count:,} lines)")
             except Exception as e:
-                logger.error(f"❌ Error reading training data: {e}")
+                print(f"❌ Error reading training data: {e}")
                 all_valid = False
         else:
-            logger.error(f"❌ Training data MISSING: {train_file}")
+            print(f"❌ Training data MISSING: {shorten_path(train_file)}")
             all_valid = False
         
         # Check validation data
@@ -182,38 +182,74 @@ class TrainingPipeline:
             try:
                 with open(val_file, 'r') as f:
                     line_count = sum(1 for _ in f)
-                logger.info(f"✅ Validation data EXISTS: {val_file} ({line_count:,} lines)")
+                print(f"✅ Validation data EXISTS: {shorten_path(val_file)} ({line_count:,} lines)")
             except Exception as e:
-                logger.error(f"❌ Error reading validation data: {e}")
+                print(f"❌ Error reading validation data: {e}")
                 all_valid = False
         else:
-            logger.error(f"❌ Validation data MISSING: {val_file}")
+            print(f"❌ Validation data MISSING: {shorten_path(val_file)}")
             all_valid = False
+        
+        # Check resume_from configuration (Transfer Learning)
+        train_cfg = self.config.get('training_config', {})
+        resume_from = train_cfg.get('resume_from')
+        if resume_from:
+            print("")
+            print("🔄 === TRANSFER LEARNING DETECTED ===")
+            print(f"📋 Config setting: resume_from = '{resume_from}'")
+            
+            try:
+                resume_path = resolve_checkpoint_path(self.config, resume_from)
+                if resume_path.exists():
+                    file_size_mb = resume_path.stat().st_size / (1024 * 1024)
+                    print(f"✅ Source checkpoint EXISTS: {shorten_path(resume_path)}")
+                    print(f"   📊 File size: {file_size_mb:.1f} MB")
+                    print(f"   📅 Last modified: {datetime.fromtimestamp(resume_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+                    print("   🎯 Training will RESUME from this checkpoint")
+                else:
+                    print(f"❌ Source checkpoint MISSING: {shorten_path(resume_path)}")
+                    all_valid = False
+            except Exception as e:
+                print(f"❌ Error resolving checkpoint path '{resume_from}': {e}")
+                all_valid = False
+        else:
+            print("🆕 Fresh training (no resume_from specified)")
         
         return all_valid
     
     def _print_execution_plan(self):
         """Print what the pipeline will do."""
-        logger.info("")
-        logger.info("🎯 Execution Plan:")
+        print("")
+        print("🎯 Execution Plan:")
         
         if self.tokenizer_exists:
-            logger.info("   1️⃣ Skip tokenizer training (already exists)")
+            print("   1️⃣ Skip tokenizer training (already exists)")
         else:
-            logger.info(f"   1️⃣ Train new tokenizer → {self.paths['tokenizer']}")
+            print(f"   1️⃣ Train new tokenizer → {shorten_path(self.paths['tokenizer'])}")
         
-        logger.info(f"   2️⃣ Train model → {self.paths['model']}")
-        logger.info("   3️⃣ Test inference with sample prompt")
-        logger.info("")
-        logger.info(f"⏱️  Estimated time: 4-6 hours for model training")
-        logger.info(f"🔄 Max retries: {self.max_retries}")
-        logger.info(f"⏰ Timeout: {self.timeout_hours} hours")
-        logger.info("")
+        # Check if this is transfer learning
+        train_cfg = self.config.get('training_config', {})
+        resume_from = train_cfg.get('resume_from')
+        if resume_from:
+            print(f"   2️⃣ TRANSFER LEARNING: Resume training from '{resume_from}' → {shorten_path(self.paths['model'])}")
+        else:
+            print(f"   2️⃣ Train new model from scratch → {shorten_path(self.paths['model'])}")
+            
+        print("   3️⃣ Test inference with sample prompt")
+        print("")
+        
+        if resume_from:
+            print("🔄 Transfer Learning: Continuing from existing checkpoint")
+        
+        print(f"⏱️  Estimated time: 4-6 hours for model training")
+        print(f"🔄 Max retries: {self.max_retries}")
+        print(f"⏰ Timeout: {self.timeout_hours} hours")
+        print("")
     
     def _get_user_confirmation(self) -> bool:
         """Get user confirmation to proceed."""
         if self.auto_confirm:
-            logger.info("🚀 Auto-confirm enabled, proceeding...")
+            print("🚀 Auto-confirm enabled, proceeding...")
             return True
             
         while True:
@@ -221,7 +257,7 @@ class TrainingPipeline:
             if response in ['y', 'yes']:
                 return True
             elif response in ['n', 'no']:
-                logger.info("🚫 Training cancelled by user")
+                print("🚫 Training cancelled by user")
                 return False
             else:
                 print("Please enter 'y' or 'n'")
@@ -229,9 +265,9 @@ class TrainingPipeline:
     def _disable_system_sleep(self):
         """Attempt to disable system sleep during training."""
         try:
-            # Check if we should skip sudo commands
-            if self.skip_sudo or os.environ.get('TMUX') or not self._can_sudo_without_password():
-                logger.info("🔒 Skipping system sleep prevention (skip-sudo flag, tmux session, or sudo requires password)")
+            # Check if we should skip sudo commands (but NOT because of tmux!)
+            if self.skip_sudo or not self._can_sudo_without_password():
+                logger.info("🔒 Skipping system sleep prevention (skip-sudo flag or sudo requires password)")
                 logger.info("💡 You can manually prevent sleep with: sudo systemctl mask sleep.target")
                 return
                 
@@ -282,7 +318,7 @@ class TrainingPipeline:
         
         logger.info("🔤 Step 1: Training tokenizer...")
         try:
-            cmd = ['train-tokenizer', str(self.config_path)]
+            cmd = ['train-tokenizer', '--config', str(self.config_path)]
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             logger.info("✅ Tokenizer training completed")
             logger.debug(f"Tokenizer output: {result.stdout}")
@@ -330,29 +366,28 @@ class TrainingPipeline:
                 time.sleep(30)
         
         raise TrainingPipelineError(f"Model training failed after {self.max_retries} attempts")
-  
+    
     def _test_inference(self):
-        """Test model inference (non-interactive)."""
+        """Test model inference."""
         logger.info("🎯 Step 3: Testing inference...")
         try:
-            cmd = [
-                'modern-gpt-infer',
-                '--config', str(self.config_path),
-                '--prompt', "What is an elephant?"
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-            if result.returncode == 0:
+            cmd = ['modern-gpt-infer', '--config', str(self.config_path)]
+            process = subprocess.Popen(cmd, stdin=subprocess.PIPE, 
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                     text=True)
+            
+            stdout, stderr = process.communicate(input="What is an elephant?\n", timeout=60)
+            
+            if process.returncode == 0:
                 logger.info("✅ Inference test completed")
-                logger.info(f"Model response:\n{result.stdout.strip()}")
+                logger.info(f"Model response: {stdout.strip()}")
             else:
-                logger.error(f"❌ Inference test failed:\n{result.stderr.strip()}")
-
+                logger.error(f"❌ Inference test failed: {stderr}")
+                
         except subprocess.TimeoutExpired:
             logger.error("❌ Inference test timed out")
         except Exception as e:
             logger.error(f"❌ Inference test error: {e}")
-
     
     def run(self):
         """Execute the complete training pipeline."""
@@ -370,7 +405,7 @@ class TrainingPipeline:
             
             # Dry run exit
             if self.dry_run:
-                logger.info("🔍 Dry run completed - all checks passed!")
+                print("🔍 Dry run completed - all checks passed!")
                 return
             
             # Get user confirmation

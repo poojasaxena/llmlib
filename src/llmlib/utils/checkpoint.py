@@ -7,6 +7,7 @@ import json
 import torch
 from typing import Type
 from .path_util import get_model_dir
+from llmlib.utils.path_util import resolve_checkpoint_path
 
 def save_model(model, 
                project_config: dict, 
@@ -114,3 +115,108 @@ def load_model(
         model.eval()
 
     return model
+
+
+def resume_checkpoint_if_available(
+    *,
+    cfg,
+    train_cfg,
+    model,
+    optimizer,
+    scheduler,
+    device,
+    logger,
+):
+    """
+    Resume training state if a checkpoint is provided.
+
+    Supports:
+    - full checkpoints (model + optimizer + scheduler)
+    - legacy checkpoints (model weights only)
+
+    Returns:
+        start_step (int)
+        best_val (float)
+        best_step (int)
+    """
+    start_step = 0
+    best_val = float("inf")
+    best_step = -1
+
+    resume_from = train_cfg.get("resume_from")
+    if not resume_from:
+        logger.info("[modern-gpt-train] No resume_from specified - starting fresh training")
+        return start_step, best_val, best_step
+
+    resume_path = resolve_checkpoint_path(cfg, resume_from)
+    if not resume_path.exists():
+        raise FileNotFoundError(f"resume_from checkpoint not found: {resume_path}")
+
+    logger.info(f"[modern-gpt-train] 🔄 RESUMING FROM CHECKPOINT:")
+    logger.info(f"[modern-gpt-train]    Config setting: '{resume_from}'")  
+    logger.info(f"[modern-gpt-train]    Resolved path: {resume_path}")
+    logger.info(f"[modern-gpt-train]    File size: {resume_path.stat().st_size / (1024*1024):.1f} MB")
+
+    ckpt = torch.load(resume_path, map_location=device)
+
+    # ---- New format: full checkpoint ----
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+
+        if ckpt.get("optimizer") is not None:
+            optimizer.load_state_dict(ckpt["optimizer"])
+
+        if scheduler is not None and ckpt.get("scheduler") is not None:
+            scheduler.load_state_dict(ckpt["scheduler"])
+
+        start_step = int(ckpt.get("step", 0))
+        best_val = float(ckpt.get("best_val", float("inf")))
+        best_step = int(ckpt.get("best_step", -1))
+
+        # Optional RNG restore
+        if ckpt.get("rng_state") is not None:
+            torch.random.set_rng_state(ckpt["rng_state"])
+        if ckpt.get("cuda_rng_state") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(ckpt["cuda_rng_state"])
+
+        logger.info(
+            f"[modern-gpt-train] ✅ FULL CHECKPOINT RESTORED:"
+            f"\n                      Step: {start_step}"
+            f"\n                      Best validation loss: {best_val:.4f}"
+            f"\n                      Best step: {best_step}"
+            f"\n                      Optimizer state: {'✅' if ckpt.get('optimizer') else '❌'}"
+            f"\n                      Scheduler state: {'✅' if ckpt.get('scheduler') else '❌'}"
+            f"\n                      RNG state: {'✅' if ckpt.get('rng_state') else '❌'}"
+        )
+
+    # ---- Old format: weights only ----
+    else:
+        model.load_state_dict(ckpt)
+        logger.info("[modern-gpt-train] ⚠️  WEIGHTS-ONLY CHECKPOINT RESTORED:")
+        logger.info("[modern-gpt-train]     (No optimizer/scheduler/step info available)")
+        logger.info("[modern-gpt-train]     Training will start from step 0 with fresh optimizer")
+
+    return start_step, best_val, best_step
+
+
+def pack_checkpoint(
+    *,
+    model,
+    optimizer,
+    scheduler,
+    step,
+    best_val,
+    best_step,
+):
+    return {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler else None,
+        "step": step,
+        "best_val": best_val,
+        "best_step": best_step,
+        "rng_state": torch.random.get_rng_state(),
+        "cuda_rng_state": (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        ),
+    }

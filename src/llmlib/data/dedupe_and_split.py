@@ -1,6 +1,10 @@
-import os
 from pathlib import Path
 from typing import Tuple
+
+
+def _norm_key(s: str) -> str:
+    # Match your overlap checker
+    return " ".join(s.strip().lower().split())
 
 
 def dedupe_and_filter_corpus(
@@ -10,52 +14,32 @@ def dedupe_and_filter_corpus(
     max_len: int = 500,
     encoding: str = "utf-8",
 ) -> Tuple[int, int, int]:
-    """
-    Deduplicate and filter a text corpus while preserving line order.
-
-    Steps:
-    - Strip whitespace
-    - Remove empty lines
-    - Deduplicate while preserving order
-    - Filter lines by length
-    - Write cleaned corpus to output_file
-
-    Args:
-        input_file: Path to input text file
-        output_file: Path to write cleaned text
-        min_len: Minimum allowed line length
-        max_len: Maximum allowed line length
-        encoding: File encoding
-
-    Returns:
-        (original_lines, unique_lines, filtered_lines)
-    """
-
     if not input_file.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
     # Read + strip + drop empty
     lines = [
-        line.rstrip() for line in input_file.open(encoding=encoding) if line.strip()
+        line.rstrip("\n") for line in input_file.open(encoding=encoding) if line.strip()
     ]
+    original_lines = len(lines)
 
-    # Deduplicate (preserve order)
-    seen = set()
+    # Deduplicate by normalized key (preserve first occurrence)
+    seen_keys = set()
     unique = []
     for line in lines:
-        if line in seen:
+        key = _norm_key(line)
+        if key in seen_keys:
             continue
-        seen.add(line)
+        seen_keys.add(key)
         unique.append(line)
 
-    # Length filter
+    unique_lines = len(unique)
+
+    # Length filter (apply to original line content)
     filtered = [line for line in unique if min_len <= len(line) <= max_len]
+    filtered_lines = len(filtered)
 
-    # Write output
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text(
-        "\n".join(filtered) + "\n",
-        encoding=encoding,
-    )
+    output_file.write_text("\n".join(filtered) + "\n", encoding=encoding)
 
-    return len(lines), len(unique), len(filtered)
+    return original_lines, unique_lines, filtered_lines
