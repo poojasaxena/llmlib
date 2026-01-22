@@ -2,6 +2,18 @@ from pathlib import Path
 from typing import Tuple
 
 
+BAD_PATTERNS = [
+    "in related news",
+    "similarly",
+]
+def is_bad(line: str) -> bool:
+    s = line.strip().lower()
+    if s.startswith("q:"):
+        return True
+    if "answer:" in s:
+        return True
+    return any(p in s for p in BAD_PATTERNS)
+
 def _norm_key(s: str) -> str:
     # Match your overlap checker
     return " ".join(s.strip().lower().split())
@@ -21,6 +33,11 @@ def dedupe_and_filter_corpus(
     lines = [
         line.rstrip("\n") for line in input_file.open(encoding=encoding) if line.strip()
     ]
+    lines = [line for line in lines if not is_bad(line)]
+
+    bad_count = sum(1 for line in lines if is_bad(line))
+    print(f"[dedupe] removed bad template lines: {bad_count}")
+
     original_lines = len(lines)
 
     # Deduplicate by normalized key (preserve first occurrence)

@@ -117,6 +117,7 @@ def load_model(
     return model
 
 
+
 def resume_checkpoint_if_available(
     *,
     cfg,
@@ -139,6 +140,10 @@ def resume_checkpoint_if_available(
         best_val (float)
         best_step (int)
     """
+
+    def _has(key: str) -> bool:
+        return ckpt.get(key, None) is not None
+
     start_step = 0
     best_val = float("inf")
     best_step = -1
@@ -184,9 +189,9 @@ def resume_checkpoint_if_available(
             f"\n                      Step: {start_step}"
             f"\n                      Best validation loss: {best_val:.4f}"
             f"\n                      Best step: {best_step}"
-            f"\n                      Optimizer state: {'✅' if ckpt.get('optimizer') else '❌'}"
-            f"\n                      Scheduler state: {'✅' if ckpt.get('scheduler') else '❌'}"
-            f"\n                      RNG state: {'✅' if ckpt.get('rng_state') else '❌'}"
+            f"\n                      Optimizer state: {'✅' if _has('optimizer') else '❌'}"
+            f"\n                      Scheduler state: {'✅' if _has('scheduler') else '❌'}"
+            f"\n                      RNG state: {'✅' if _has('rng_state') else '❌'}"
         )
 
     # ---- Old format: weights only ----
