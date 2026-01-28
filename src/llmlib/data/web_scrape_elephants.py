@@ -1,144 +1,327 @@
 #!/usr/bin/env python3
 """
-Web scraping script for elephant-related content from reliable sources.
-Focuses on educational and conservation websites.
+web_scrape_elephants.py  (FINAL / CLEAN)
+
+Goals
+- Be polite to Wikipedia (use MediaWiki API, not raw HTML scraping).
+- Avoid 403/robots issues (rate limit + backoff).
+- Produce CLEAN training lines:
+  - one item per line
+  - no Q:/A:/Human:/Assistant scaffolding
+  - remove wiki citations like [12], [1][2]
+  - drop section junk (References, See also, External links)
+  - keep short-but-complete sentences (do NOT drop '?' or short lines blindly)
+
+Output:
+  ~/PoojaVault/Professional/Workbench/Datasets/llm/mixed_text/raw/web_scraped_elephants.txt
+
+Usage:
+  python web_scrape_elephants.py [OUT_DIR] [MAX_ITEMS]
+Example:
+  python web_scrape_elephants.py ~/PoojaVault/Professional/Workbench/Datasets/llm/mixed_text/raw 1200
 """
 
-import requests
-from bs4 import BeautifulSoup
-import time
+from __future__ import annotations
+
 import re
+import sys
+import time
+import random
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional
-import json
+from typing import Iterable, List, Optional
 
-class ElephantDataScraper:
-    """Scrape elephant content from reliable sources"""
-    
-    def __init__(self, delay: float = 1.0):
+import requests
+
+
+# ----------------------------
+# Cleaning utilities
+# ----------------------------
+
+RE_WS = re.compile(r"\s+")
+RE_CITES = re.compile(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]")          # [12] or [1, 2]
+RE_CITES_CHAIN = re.compile(r"\[\d+(?:\]\[\d+)*\]")            # [12][20]
+RE_SECTION_JUNK = re.compile(r"^(see also|references|external links)\b[: ]?", re.I)
+RE_URL = re.compile(r"https?://\S+|www\.\S+", re.I)
+
+BAD_ANYWHERE = [
+    "in related news",
+    "on the other hand",
+    # keep these *rare* if they exist; we drop them here to avoid loop attractors
+    "moreover",
+    "additionally",
+    "similarly",
+]
+
+BAD_PREFIX_RE = re.compile(
+    r"^\s*(human(?:\s*\d+)?|assistant|system|question|answer|q|a)\s*:\s*",
+    re.I,
+)
+
+
+def clean_line(s: str, *, min_chars: int = 25, max_chars: int = 800) -> str:
+    s = s.strip()
+    if not s:
+        return ""
+
+    # remove obvious scaffolding prefixes (but keep the content!)
+    s = BAD_PREFIX_RE.sub("", s).strip()
+    if not s:
+        return ""
+
+    # normalize whitespace + remove control chars
+    s = RE_WS.sub(" ", s)
+    s = "".join(ch for ch in s if ord(ch) >= 32).strip()
+
+    low = s.lower()
+    if RE_SECTION_JUNK.match(s):
+        return ""
+
+    if RE_URL.search(s):
+        return ""
+
+    # drop "poison glue" anywhere
+    if any(b in low for b in BAD_ANYWHERE):
+        return ""
+
+    # remove wiki citations
+    s = RE_CITES.sub("", s)
+    s = RE_CITES_CHAIN.sub("", s)
+    s = RE_WS.sub(" ", s).strip()
+
+    # basic sanity (keep short-but-good lines; don't drop '?' automatically)
+    if len(s) < min_chars:
+        # allow very short but complete sentences sometimes, e.g. "Elephants are herbivores."
+        # We accept if it ends with punctuation and has enough letters.
+        alpha = sum(ch.isalpha() for ch in s)
+        if not (alpha >= 10 and s[-1] in ".!?"):
+            return ""
+
+    if len(s) > max_chars:
+        return ""
+
+    # Drop super fragmenty lines even if long (low alpha ratio)
+    alpha = sum(ch.isalpha() for ch in s)
+    if alpha < 12:
+        return ""
+
+    # Light normalize: capitalize first letter (optional)
+    if s and s[0].islower():
+        s = s[0].upper() + s[1:]
+
+    return s
+
+
+def split_to_sentences(text: str) -> List[str]:
+    """
+    Conservative sentence splitter.
+    Keeps punctuation. Good enough for Wikipedia extracts.
+    """
+    text = RE_WS.sub(" ", text).strip()
+    if not text:
+        return []
+    # split on .!? followed by space + capital (rough heuristic)
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+# ----------------------------
+# Wikipedia API scraping
+# ----------------------------
+
+@dataclass
+class WikiPage:
+    title: str
+    extract: str
+
+
+class ElephantWikiScraper:
+    """
+    Uses MediaWiki API extracts endpoint:
+      https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=...
+    This is API-friendly and avoids HTML scraping.
+    """
+
+    API_URL = "https://en.wikipedia.org/w/api.php"
+
+    def __init__(
+        self,
+        *,
+        delay: float = 1.2,
+        jitter: float = 0.5,
+        timeout: float = 15.0,
+        max_retries: int = 5,
+        seed: int = 42,
+        user_agent: str = "ElephantGPTDataBot/1.0 (contact: local-script; purpose: research dataset building)",
+    ):
         self.delay = delay
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-    def clean_text(self, text: str) -> str:
-        """Clean and normalize scraped text"""
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Remove special characters but keep punctuation
-        text = re.sub(r'[^\w\s.,!?;:()\-]', '', text)
-        # Remove URLs
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
-        return text.strip()
-    
-    def scrape_wikipedia_sections(self) -> List[str]:
-        """Scrape elephant-related Wikipedia content"""
-        
-        urls = [
-            'https://en.wikipedia.org/wiki/Elephant',
-            'https://en.wikipedia.org/wiki/African_elephant', 
-            'https://en.wikipedia.org/wiki/Asian_elephant',
-            'https://en.wikipedia.org/wiki/Elephant_behavior',
-            'https://en.wikipedia.org/wiki/Elephant_cognition'
-        ]
-        
-        scraped_content = []
-        
-        for url in urls:
-            try:
-                print(f"📡 Scraping: {url}")
-                response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()
-                
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Extract paragraphs from main content
-                content_div = soup.find('div', {'id': 'mw-content-text'})
-                if content_div:
-                    paragraphs = content_div.find_all('p')
-                    
-                    for p in paragraphs:
-                        text = p.get_text()
-                        cleaned = self.clean_text(text)
-                        
-                        # Filter for substantial paragraphs about elephants
-                        if (len(cleaned) > 100 and 
-                            ('elephant' in cleaned.lower() or 'trunk' in cleaned.lower()) and
-                            not cleaned.startswith('Coordinates:')):
-                            scraped_content.append(cleaned)
-                
-                time.sleep(self.delay)
-                
-            except Exception as e:
-                print(f"❌ Error scraping {url}: {e}")
-                continue
-        
-        print(f"✅ Scraped {len(scraped_content)} paragraphs from Wikipedia")
-        return scraped_content
-    
-    def generate_elephant_facts_from_sources(self) -> List[str]:
-        """Generate educational facts from reliable sources"""
-        
-        # These are facts that can be safely stated (publicly available information)
-        educational_facts = [
-            "African elephants can weigh up to 6 tons and stand 13 feet tall.",
-            "Asian elephants are smaller, weighing up to 5 tons and standing 9 feet tall.",
-            "Elephants spend 12-18 hours a day eating vegetation.",
-            "An elephant's trunk contains over 40,000 muscles.",
-            "Elephants can recognize themselves in mirrors, showing self-awareness.",
-            "Female elephants are pregnant for 22 months, the longest of any mammal.",
-            "Elephants have been observed using tools, such as sticks for scratching.",
-            "The word 'elephant' comes from the Greek word 'elephas' meaning ivory.",
-            "Elephants can hear sounds at frequencies as low as 1 Hz.",
-            "Wild elephants walk an average of 50 miles per day searching for food.",
-            "Elephants have poor eyesight but excellent hearing and smell.",
-            "Baby elephants suck their trunks for comfort, like human babies suck thumbs.",
-            "Elephants can learn to paint and have been taught to create artwork.",
-            "The oldest known elephant lived to be 82 years old in captivity.",
-            "Elephants fear bees and will avoid areas where they hear buzzing sounds.",
-            "Elephant family groups are led by the oldest and wisest female, called the matriarch.",
-            "When an elephant dies, other elephants have been observed mourning and covering the body with grass and dirt.",
-            "Elephants can swim and use their trunks like snorkels when crossing deep water.",
-            "African elephants have wrinkled skin to help them stay cool by trapping moisture.",
-            "Asian elephants are more closely related to extinct woolly mammoths than to African elephants."
-        ]
-        
-        return educational_facts
+        self.jitter = jitter
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.rng = random.Random(seed)
+        self.sess = requests.Session()
+        self.sess.headers.update({"User-Agent": user_agent})
 
-def main():
-    """Main scraping and data generation function"""
-    
-    output_dir = Path.home() / "PoojaVault/Professional/Workbench/Datasets/llm/mixed_text/raw"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    scraper = ElephantDataScraper(delay=1.5)
-    
-    all_content = []
-    
-    # 1. Generate educational facts
-    print("📚 Generating educational facts...")
-    facts = scraper.generate_elephant_facts_from_sources()
-    all_content.extend(facts)
-    
-    # 2. Scrape Wikipedia (be respectful)
-    print("🌐 Scraping Wikipedia content...")
-    try:
-        wiki_content = scraper.scrape_wikipedia_sections()
-        all_content.extend(wiki_content)
-    except Exception as e:
-        print(f"⚠️ Wikipedia scraping failed: {e}")
-    
-    # Save all content
-    output_file = output_dir / "web_scraped_elephants.txt"
-    
-    with output_file.open('w', encoding='utf-8') as f:
-        for item in all_content:
-            f.write(item + "\n\n")
-    
-    size_bytes = output_file.stat().st_size
-    print(f"\n✅ Scraping complete!")
-    print(f"📁 Saved {len(all_content)} items to: {output_file}")
-    print(f"📊 File size: {size_bytes / 1024:.1f} KB")
+    def _sleep(self):
+        time.sleep(self.delay + self.rng.random() * self.jitter)
+
+    def fetch_extract(self, title: str) -> Optional[WikiPage]:
+        params = {
+            "action": "query",
+            "format": "json",
+            "prop": "extracts",
+            "explaintext": "1",
+            "exsectionformat": "plain",
+            "redirects": "1",
+            "titles": title,
+        }
+
+        last_err = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                r = self.sess.get(self.API_URL, params=params, timeout=self.timeout)
+                # 429 or transient errors -> backoff
+                if r.status_code in (429, 500, 502, 503, 504):
+                    raise requests.HTTPError(f"HTTP {r.status_code}", response=r)
+                r.raise_for_status()
+                data = r.json()
+
+                pages = data.get("query", {}).get("pages", {})
+                if not pages:
+                    return None
+                # pages is dict keyed by pageid
+                page = next(iter(pages.values()))
+                extract = page.get("extract", "") or ""
+                title_out = page.get("title", title) or title
+
+                self._sleep()
+                return WikiPage(title=title_out, extract=extract)
+
+            except Exception as e:
+                last_err = e
+                # exponential-ish backoff
+                backoff = min(20.0, (2 ** (attempt - 1)) + self.rng.random())
+                time.sleep(backoff)
+
+        print(f"❌ Failed to fetch '{title}': {last_err}")
+        return None
+
+    def extract_clean_lines(self, page: WikiPage) -> List[str]:
+        """
+        Turn the extract into sentence-level lines.
+        """
+        text = page.extract
+        if not text:
+            return []
+
+        # Drop very noisy "Contents" style lines if any
+        raw_lines: List[str] = []
+        for para in text.split("\n"):
+            para = para.strip()
+            if not para:
+                continue
+            if RE_SECTION_JUNK.match(para):
+                continue
+            # split paragraph into sentences
+            raw_lines.extend(split_to_sentences(para))
+
+        cleaned = []
+        for s in raw_lines:
+            c = clean_line(s)
+            if c:
+                cleaned.append(c)
+
+        return cleaned
+
+
+def generate_static_facts() -> List[str]:
+    """
+    Small curated facts (safe, general, and not too quirky).
+    Keep this modest to avoid dominating prefixes.
+    """
+    return [
+        "Elephants are large herbivorous mammals found in Africa and Asia.",
+        "African elephants are generally larger than Asian elephants.",
+        "Elephants use their trunks for breathing, smelling, drinking, and grasping.",
+        "Elephants communicate using vocalizations, touch, and body language.",
+        "Elephant family groups are often led by an older female called a matriarch.",
+        "Elephants can travel long distances to find food and water.",
+        "Poaching and habitat loss are major threats to elephant populations.",
+        "Elephants may use mud and water to help cool their bodies and protect their skin.",
+        "Elephants play important roles in ecosystems by shaping vegetation and dispersing seeds.",
+    ]
+
+
+# ----------------------------
+# Main
+# ----------------------------
+
+def main() -> int:
+    # Defaults compatible with your pipeline
+    if len(sys.argv) >= 2:
+        out_dir = Path(sys.argv[1]).expanduser()
+    else:
+        out_dir = Path.home() / "PoojaVault/Professional/Workbench/Datasets/llm/mixed_text/raw"
+
+    max_items = int(sys.argv[2]) if len(sys.argv) >= 3 else 1000
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "web_scraped_elephants.txt"
+
+    titles = [
+        "Elephant",
+        "African elephant",
+        "Asian elephant",
+        "Elephant cognition",
+        "Elephant behaviour",
+        "Elephant communication",
+        "Elephant conservation",
+        "Elephantidae",
+        "Loxodonta",
+        "Elephas maximus",
+    ]
+
+    scraper = ElephantWikiScraper(delay=1.1, jitter=0.6, max_retries=5)
+
+    all_lines: List[str] = []
+
+    # 1) add small curated facts (kept small)
+    all_lines.extend([clean_line(x) for x in generate_static_facts() if clean_line(x)])
+
+    # 2) fetch wiki extracts via API
+    for t in titles:
+        print(f"📡 Fetching Wikipedia extract: {t}")
+        page = scraper.fetch_extract(t)
+        if not page:
+            continue
+        lines = scraper.extract_clean_lines(page)
+        print(f"   ✅ got {len(lines)} clean lines from '{page.title}'")
+        all_lines.extend(lines)
+        if len(all_lines) >= max_items:
+            break
+
+    # de-dupe (case-insensitive) but preserve order
+    seen = set()
+    final: List[str] = []
+    for s in all_lines:
+        k = s.strip().lower()
+        if not k:
+            continue
+        if k in seen:
+            continue
+        seen.add(k)
+        final.append(s)
+        if len(final) >= max_items:
+            break
+
+    out_file.write_text("\n".join(final) + "\n", encoding="utf-8")
+    size_kb = out_file.stat().st_size / 1024
+
+    print("\n✅ Scraping complete!")
+    print(f"📁 Saved {len(final)} lines to: {out_file}")
+    print(f"📊 File size: {size_kb:.1f} KB")
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

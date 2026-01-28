@@ -4,16 +4,14 @@ build-backend   = "setuptools.build_meta"
 
 [project]
 name            = "llmlib"
-version         = "4.2.6"
+version         = "5.2.10"
 description     = "Pooja's LLM utilities and tiny transformer library"
 readme          = "ReadMe.md"
 requires-python = ">=3.10"
 dependencies    = ["psutil>=5.9.0"]
 
-
-
 [project.scripts]
-### Tiny GPT CLI entries / Old Files
+### Tiny GPT CLI entries [DEPRECATED]
 tiny-gpt-train  = "llmlib.cli.tiny_gpt_cli:tiny_gpt_train"
 tiny-gpt-infer  = "llmlib.cli.tiny_gpt_cli:tiny_gpt_infer"
 
@@ -21,9 +19,6 @@ tiny-gpt-infer  = "llmlib.cli.tiny_gpt_cli:tiny_gpt_infer"
 train-tokenizer = "llmlib.cli.train_tokenizer_cli:main"
 modern-gpt-train = "llmlib.cli.modern_gpt_train_cli:modern_gpt_train"
 modern-gpt-infer = "llmlib.cli.modern_gpt_infer_cli:modern_gpt_infer"
-
-### Data Validation CLI entries
-llmlib-data-checks = "llmlib.data.sanity_checks:main"
 
 ### Training Pipeline CLI entries
 llmlib-train-pipeline = "llmlib.cli.train_pipeline_cli:main"
@@ -39,8 +34,18 @@ llmlib-disable-sleep = "llmlib.cli.sleep_prevention_cli:disable_sleep"
 llmlib-enable-sleep = "llmlib.cli.sleep_prevention_cli:enable_sleep"
 
 ### Data Pipeline CLI entries
+# Full end-to-end pipeline: prepare -> generate -> dedupe -> split -> stats
+# Use `--no-generation` to skip all data generation steps
 llmlib-run-data-pipeline = "llmlib.data.pipeline.run_full_data_pipeline:main"
+
+# Run only generation components (advanced/webscrape/augment), no dedupe/split
 llmlib-run-data-generation = "llmlib.data.run_data_generation:main"
+
+### Data Validation CLI entries
+llmlib-data-checks = "llmlib.data.sanity_checks:main"
+##Example: llmlib-data-checks --config config_8.json --health-check'
+
+# Minimal test run with temporary data to verify pipeline wiring
 llmlib-test-data-pipeline = "llmlib.data.test_enhanced_pipeline:main"
 
 [tool.setuptools]

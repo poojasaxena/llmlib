@@ -323,7 +323,6 @@ def modern_gpt_infer() -> None:
     print(f"Max new tokens     : {max_new_tokens}")
     print("============================================================\n")
 
-    
     # Debug the model generation first
     if DEBUG:
         debug_model_generation(model, tokenizer, temperature, device)
@@ -334,11 +333,12 @@ def modern_gpt_infer() -> None:
         print(f"In the wild, elephants -> {gen('In the wild, elephants')}")
 
     # Interactive prompt loop or single generation
-    if args.prompt:
+    if args.prompt is not None:
+        prompt = args.prompt.strip()
         # Single prompt mode
-        output = gen(args.prompt)
+        output = gen(prompt)
         print("---")
-        print(f"Prompt : {args.prompt}")
+        print(f"Prompt : {prompt}")
         print(f"Output : {output}")
     else:
         # Interactive mode
@@ -368,7 +368,6 @@ def modern_gpt_infer() -> None:
         except KeyboardInterrupt:
             print("\n\nInterrupted by user. Goodbye! 👋")
 
-   
 
 def validate_inference_config(cfg: dict) -> dict:
     if "inference_config" not in cfg:

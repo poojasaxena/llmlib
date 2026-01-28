@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 import json
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
 
 from llmlib.modeling.modern_gpt import ModernGPTConfig, ModernGPTModel
 from llmlib.utils.path_util import get_data_split_path
@@ -85,10 +86,10 @@ def modern_gpt_train() -> None:
 
     # Load tokenizer for data checks
     tokenizer = load_tokenizer(cfg)  # pass the full project config
-    
+
     # Run data sanity checks
     run_data_sanity_checks(cfg, tokenizer)
-    
+
     # If only data checks requested, exit here
     if args.data_checks_only:
         print("✅ Data sanity checks completed. Exiting (--data-checks-only flag used).")
@@ -141,10 +142,19 @@ def modern_gpt_train() -> None:
     print("BOS:", tokenizer.token_to_id("<bos>"))
     print("EOS:", tokenizer.token_to_id("<eos>"))
 
-    encoded_data = [tokenizer.encode(t) for t in text.splitlines() if t]
+    bos_id = tokenizer.token_to_id("<bos>")
+    eos_id = tokenizer.token_to_id("<eos>")
 
+    lines = [t.strip() for t in text.splitlines() if t.strip()]
+    encoded_data = [tokenizer.encode(t) for t in lines]
     if not encoded_data:
         raise ValueError(f"No non-empty lines found in dataset: {data_path}")
+
+    flat_ids_list = []
+    for seq in encoded_data:
+        flat_ids_list.extend([bos_id] + seq + [eos_id])
+
+    flat_ids = torch.tensor(flat_ids_list, dtype=torch.long)  # CPU stream
 
     max_seq_len = meta_cfg["max_seq_length"]
     batch_size = train_cfg["batch_size"]
@@ -199,24 +209,30 @@ def modern_gpt_train() -> None:
     print("============================================================\n")
 
     ## 4) Batching helper
-    def make_batch(bs: int) -> torch.Tensor:
-        idx = torch.randint(0, len(encoded_data), (bs,))
-        batch = [
-        [tokenizer.token_to_id("<bos>")] + encoded_data[i][:max_seq_len-2] + [tokenizer.token_to_id("<eos>")]
-        for i in idx
-        ]
-        batch = [torch.tensor(x, dtype=torch.long) for x in batch]
+    block_size = train_cfg.get("block_size", max_seq_len)
+    # block_size is the input length; targets are shifted by 1
+    seq_len = min(block_size, max_seq_len)
+    max_start = flat_ids.size(0) - (seq_len + 1)
+    if max_start <= 0:
+        raise ValueError(f"Token stream too short for seq_len={seq_len}")
 
-        max_len = max(len(x) for x in batch)
-        padded = [
-        torch.cat([
-            x,
-            torch.full((max_len - len(x),), pad_id, dtype=torch.long)
-        ])
-        for x in batch
-        ]
+    # Precompute offsets for fast indexing (CPU tensor)
+    offsets = torch.arange(seq_len + 1, dtype=torch.long)
 
-        return torch.stack(padded, dim=0)
+    def make_batch_stream(bs: int):
+        # Sample start positions, then gather a contiguous block per sample
+        starts = torch.randint(0, max_start, (bs,), dtype=torch.long)
+        idx = starts.unsqueeze(1) + offsets.unsqueeze(0)  # (bs, seq_len+1)
+        batch = flat_ids[idx]
+        x = batch[:, :-1]
+        y = batch[:, 1:]
+        attn = torch.ones_like(x, dtype=torch.long)
+        return (
+            x.to(device, non_blocking=True),
+            y.to(device, non_blocking=True),
+            attn.to(device, non_blocking=True),
+        )
+
 
     best_val = float("inf")
     best_step = -1
@@ -282,6 +298,7 @@ def modern_gpt_train() -> None:
     )
 
     model.train()
+    t0 = time.time()
 
     end_step = start_step + train_steps
     if end_step <= start_step:
@@ -290,19 +307,24 @@ def modern_gpt_train() -> None:
 
     for step in range(start_step + 1, end_step + 1):
 
-        input_ids = make_batch(batch_size).to(device)
-        pad_id = tokenizer.token_to_id("<pad>")
-        full_attention_mask = (input_ids != pad_id).long()
-
-        targets = input_ids[:, 1:]
-        inputs = input_ids[:, :-1]
-
-        attention_mask = full_attention_mask[:, :-1]
+        inputs, targets, attention_mask = make_batch_stream(batch_size)
         logits = model(inputs, attention_mask=attention_mask)
+        loss = criterion(
+            logits.contiguous().view(-1, config.vocab_size),
+            targets.contiguous().view(-1),
+        )
+
+        # input_ids = make_batch(batch_size).to(device)
+        # pad_id = tokenizer.token_to_id("<pad>")
+        # full_attention_mask = (input_ids != pad_id).long()
+
+        # targets = input_ids[:, 1:]
+        # inputs = input_ids[:, :-1]
+
+        # attention_mask = full_attention_mask[:, :-1]
+        # logits = model(inputs, attention_mask=attention_mask)
 
         assert inputs.shape == attention_mask.shape
-
-        loss = criterion(logits.reshape(-1, config.vocab_size), targets.reshape(-1))
 
         optimizer.zero_grad()
         loss.backward()
@@ -314,6 +336,11 @@ def modern_gpt_train() -> None:
             scheduler.step()
 
         if step % eval_interval == 0:
+
+            dt = time.time() - t0
+            if dt > 0:
+                print(f"Steps/sec: {eval_interval / dt:.3f}")
+            t0 = time.time()
 
             lr = optimizer.param_groups[0]["lr"]
 
@@ -418,7 +445,7 @@ def compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device):
             0
         )  # (1, T)
 
-        mask = (x != pad_id).long()
+        mask = torch.ones_like(x, dtype=torch.long)
         logits = model(x, attention_mask=mask)  # (1, T, vocab)
 
         # criterion returns SUM over tokens (since reduction="sum")
@@ -433,8 +460,3 @@ def compute_val_loss(model, tokenizer, val_encoded, max_seq_len, device):
 
     model.train()
     return loss_sum / max(1, token_count)
-
-
-# ---------------------------------------------------------
-# CLI Entry Points  
-# ---------------------------------------------------------

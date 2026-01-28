@@ -19,6 +19,7 @@ from llmlib.utils.path_util import get_data_split_path
 from llmlib.utils.config_util import load_config
 from llmlib.tokenization.registry import load_tokenizer
 from llmlib.utils.logger import get_logger
+from llmlib.data.health_check import run_health_check
 
 logger = get_logger(__name__)
 
@@ -214,6 +215,40 @@ Examples:
     parser.add_argument(
         "--output", type=str, help="Optional: Save results to JSON file"
     )
+    parser.add_argument(
+        "--health-check",
+        action="store_true",
+        help="Run additional line-level health checks",
+    )
+    parser.add_argument(
+        "--health-min-words",
+        default=3,
+        type=int,
+        help="Health check: threshold for 'very short' line",
+    )
+    parser.add_argument(
+        "--health-prefix-words",
+        default=6,
+        type=int,
+        help="Health check: prefix length (words) for dominance",
+    )
+    parser.add_argument(
+        "--health-topk",
+        default=30,
+        type=int,
+        help="Health check: Top-K items to display",
+    )
+    parser.add_argument(
+        "--health-near-dup",
+        action="store_true",
+        help="Health check: run near-duplicate detection (simhash)",
+    )
+    parser.add_argument(
+        "--health-near-dup-hamming",
+        default=3,
+        type=int,
+        help="Health check: max hamming distance for near-dup",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser().resolve()
@@ -226,6 +261,20 @@ Examples:
     
     # Run data sanity checks
     results = run_data_sanity_checks(cfg, tokenizer)
+
+    # Optional: run line-level health checks
+    if args.health_check:
+        train_path = get_data_split_path(cfg, "data_file")
+        val_path = get_data_split_path(cfg, "val_file")
+        run_health_check(
+            train_path=train_path,
+            val_path=val_path,
+            min_words=args.health_min_words,
+            prefix_words=args.health_prefix_words,
+            topk=args.health_topk,
+            near_dup=args.health_near_dup,
+            near_dup_hamming=args.health_near_dup_hamming,
+        )
     
     # Save results if requested
     if args.output:
